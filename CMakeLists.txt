@@ -57,4 +57,3 @@ if(BUILD_TESTING)
 	target_link_libraries(shared_memory_config_test PRIVATE rocos_igh_core)
 	add_test(NAME shared_memory_config COMMAND shared_memory_config_test)
 endif()
-
