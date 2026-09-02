@@ -114,12 +114,13 @@ void updateSharedBus(const BusState &state,
                      std::uint32_t period_us,
                      long monotonic_timestamp_us,
                      EcatBus &bus) noexcept {
+    const double current_cycle_us = statistics.current_us;
     if (bus.resetCycleTime) {
         resetTimingStatistics(statistics);
         bus.resetCycleTime = false;
     }
 
-    accountCycleDuration(statistics, statistics.current_us);
+    accountCycleDuration(statistics, current_cycle_us);
 
     bus.timestamp = monotonic_timestamp_us;
     bus.dt = period_us;

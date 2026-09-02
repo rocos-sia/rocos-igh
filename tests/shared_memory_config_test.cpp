@@ -341,6 +341,63 @@ bool testDeadlineAdvanceSkipsCatchUp() {
 }
 
 #if ROCOS_IGH_BUILD_MASTER
+bool testUpdateSharedBusResetKeepsCurrentCycleDuration() {
+    rocos::CycleStatistics stats{};
+    stats.cycles = 9;
+    stats.minimum_us = 10.0;
+    stats.maximum_us = 20.0;
+    stats.average_us = 15.0;
+    stats.current_us = 1250.0;
+
+    rocos::EcatBus bus{};
+    bus.resetCycleTime = true;
+    bus.slave_num = 1;
+
+    rocos::BusState state{};
+    state.link_up = true;
+    state.responding_slaves = 1;
+    state.al_states = EC_AL_STATE_OP;
+    state.input_wc_state = EC_WC_COMPLETE;
+    state.output_wc_state = EC_WC_COMPLETE;
+
+    rocos::updateSharedBus(state, stats, 1000U, 42L, bus);
+
+    CHECK(!bus.resetCycleTime);
+    CHECK(stats.cycles == 1U);
+    CHECK(stats.current_us == 1250.0);
+    CHECK(stats.minimum_us == 1250.0);
+    CHECK(stats.maximum_us == 1250.0);
+    CHECK(stats.average_us == 1250.0);
+    CHECK(bus.current_cycle_time == 1250.0);
+    CHECK(bus.min_cycle_time == 1250.0);
+    CHECK(bus.max_cycle_time == 1250.0);
+    CHECK(bus.avg_cycle_time == 1250.0);
+    return true;
+}
+
+bool testUpdateSharedBusPreservesRequestAndExpectationStates() {
+    rocos::CycleStatistics stats{};
+    stats.current_us = 1000.0;
+
+    rocos::EcatBus bus{};
+    bus.slave_num = 2;
+    bus.request_state = ECAT_STATE_PREOP;
+    bus.next_expected_state = ECAT_STATE_SAFEOP;
+
+    rocos::BusState state{};
+    state.link_up = true;
+    state.responding_slaves = 2;
+    state.al_states = EC_AL_STATE_OP;
+    state.input_wc_state = EC_WC_COMPLETE;
+    state.output_wc_state = EC_WC_COMPLETE;
+
+    rocos::updateSharedBus(state, stats, 1000U, 77L, bus);
+
+    CHECK(bus.request_state == ECAT_STATE_PREOP);
+    CHECK(bus.next_expected_state == ECAT_STATE_SAFEOP);
+    return true;
+}
+
 static_assert(!std::is_copy_constructible<rocos::EthercatMaster>::value,
               "EthercatMaster must own one master exclusively");
 static_assert(!std::is_move_constructible<rocos::EthercatMaster>::value,
@@ -569,6 +626,12 @@ int main() {
         return EXIT_FAILURE;
     }
 #if ROCOS_IGH_BUILD_MASTER
+    if (!testUpdateSharedBusResetKeepsCurrentCycleDuration()) {
+        return EXIT_FAILURE;
+    }
+    if (!testUpdateSharedBusPreservesRequestAndExpectationStates()) {
+        return EXIT_FAILURE;
+    }
     if (!testPublishConfigMetadata()) {
         return EXIT_FAILURE;
     }
