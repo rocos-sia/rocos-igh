@@ -225,42 +225,49 @@ PDO 方向以主站视角定义：
 
 硬件部署和诊断命令及其安全注意事项见 [ethercat-terminal-commands.md](ethercat-terminal-commands.md)。
 
-## 10. 建议代码布局
+## 10. 代码布局
 
-以下是实现阶段的最小目标布局，不表示这些文件当前已经存在：
+当前实现的实际布局：
 
 ```text
 src/
-  main.cpp                    # 参数、初始化、信号和退出
+  main.cpp                    # 参数、信号、实时设置、初始化与退出顺序
   ethercat_master.hpp/.cpp    # IgH 生命周期与周期 API
-  cyclic_task.hpp/.cpp        # 绝对时间实时循环
-  slave_config.hpp/.cpp       # 编译期从站/PDO 表
-  shared_memory_config.hpp    # 已有 IPC 与共享 ABI
+  cyclic_task.hpp/.cpp        # 绝对时间实时循环与统计
+  slave_config.hpp/.cpp       # 编译期从站/PDO 表、校验与元数据发布
+  runtime_options.hpp/.cpp    # 严格命令行解析（无 EtherCAT 副作用）
+  shared_memory_config.hpp    # IPC 与跨进程共享 ABI
 tests/
-  shared_memory_config_test.cpp
+  shared_memory_config_test.cpp  # 单一依赖无关测试可执行
 CMakeLists.txt
 cmake/
   FindEtherCAT.cmake
 ```
 
-不为这些组件增加抽象基类。测试需要替代硬件时，只在 `EthercatMaster` 的窄接口处提供简单 fake，不建立通用插件框架。
+不为这些组件增加抽象基类。测试需要替代硬件时，只在 `EthercatMaster` 的窄接口处提供简单 fake（`EthercatMasterTestPeer`），不建立通用插件框架。
 
 ## 11. CMake 目标
 
-建议只建立三个目标：
+已建立三个目标，由 `ROCOS_IGH_BUILD_MASTER` 选项切换两种模式：
 
 | 目标 | 类型 | 用途 |
 |---|---|---|
-| `rocos_igh_core` | 静态库 | EtherCAT、周期任务和 IPC 实现 |
-| `rocos_igh_master` | 可执行程序 | 链接核心库并提供进程入口 |
+| `rocos_igh_core` | 静态库 / 接口库 | EtherCAT、周期任务和 IPC 实现（主站模式静态库，无硬件模式接口库） |
+| `rocos_igh_master` | 可执行程序 | 链接核心库并提供进程入口（仅主站模式） |
 | `shared_memory_config_test` | CTest 测试 | 无硬件 IPC 行为验证 |
 
 项目要求 C++17。CMake 必须查找 `ecrt.h`、`ethercat`、Threads 和 POSIX realtime 依赖，不硬编码安装路径。标准命令为：
 
 ```bash
-cmake -S . -B build
+# 无硬件模式（无需 IgH 开发文件）
+cmake -S . -B build -DROCOS_IGH_BUILD_MASTER=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
+
+# 主站模式（需要 ecrt.h 与 libethercat）
+cmake -S . -B build-master -DROCOS_IGH_BUILD_MASTER=ON
+cmake --build build-master
+ctest --test-dir build-master --output-on-failure
 ```
 
 ## 12. 验证策略
@@ -306,6 +313,8 @@ ctest --test-dir build --output-on-failure
 - Distributed Clocks 高级同步策略；待基本 1 ms 周期稳定后单独设计。
 
 ## 14. 实现顺序
+
+> 截至当前，步骤 1–5 已完成；步骤 6（真实从站 + 实时内核下的 1 ms 验证）待硬件环境就绪后执行。
 
 1. 建立 CMake、IgH 查找模块和最小可执行目标。
 2. 实现静态从站配置和 `EthercatMaster` 初始化/释放。

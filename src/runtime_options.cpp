@@ -11,6 +11,7 @@ namespace {
 
 constexpr std::uint32_t kMinPeriodUs = 1000U;
 
+// Parses a non-negative decimal integer, rejecting signs and trailing characters.
 bool parseUnsigned(std::string_view text, std::uint64_t &value) noexcept {
     if (text.empty()) {
         return false;
@@ -28,6 +29,8 @@ bool parseUnsigned(std::string_view text, std::uint64_t &value) noexcept {
 
 }  // namespace
 
+// Parses --master-id/--period-us/--help strictly, rejecting unknown flags,
+// missing values, signs, and out-of-range integers without any EtherCAT side effect.
 bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error) {
     error.clear();
     options = RuntimeOptions{};
@@ -78,6 +81,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
     return true;
 }
 
+// Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
     return "usage: rocos_igh_master [--master-id <id>] [--period-us <period>] [--help]";
 }

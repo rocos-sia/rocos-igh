@@ -77,45 +77,56 @@ namespace rocos {
 // --------------------------------------------------------------------------
 // Data structures shared between master and client
 // --------------------------------------------------------------------------
+/**
+ * @brief Cross-process descriptor of a single process-data variable.
+ */
 struct PdVar {
-    char     name[MAX_PD_NAME_LEN]{'\0'};
-    int      offset{-1};
-    int      size{-1};
-    uint16_t index{0};
-    uint8_t  sub_index{0};
+    char     name[MAX_PD_NAME_LEN]{'\0'}; ///< Variable name (null-terminated).
+    int      offset{-1};                  ///< Byte offset into the PDO buffer.
+    int      size{-1};                    ///< Size in bytes (must equal sizeof(T)).
+    uint16_t index{0};                    ///< PDO object index.
+    uint8_t  sub_index{0};                ///< PDO object sub-index.
 };
 
+/**
+ * @brief Cross-process descriptor of one slave and its PDO variables.
+ */
 struct Slave {
-    int  id{-1};
-    char name[MAX_SLAVE_NAME_LEN]{'\0'};
+    int  id{-1};                          ///< Slave index.
+    char name[MAX_SLAVE_NAME_LEN]{'\0'};  ///< Slave name (null-terminated).
 
-    int input_var_num{0};
-    int output_var_num{0};
+    int input_var_num{0};                 ///< Number of valid input_vars entries.
+    int output_var_num{0};                ///< Number of valid output_vars entries.
 
-    PdVar input_vars[MAX_PDINPUT_NUM];
-    PdVar output_vars[MAX_PDOUTPUT_NUM];
+    PdVar input_vars[MAX_PDINPUT_NUM];    ///< Input (TxPDO) variables.
+    PdVar output_vars[MAX_PDOUTPUT_NUM];  ///< Output (RxPDO) variables.
 };
 
+/**
+ * @brief Cross-process bus snapshot shared between master and clients.
+ *
+ * This is an ABI type: do not change field order, types, or array sizes.
+ */
 struct EcatBus {
-    long   timestamp{0};
+    long   timestamp{0}; ///< Last cycle monotonic timestamp [us].
 
-    double min_cycle_time{0.0};
-    double max_cycle_time{0.0};
-    double avg_cycle_time{0.0};
-    double current_cycle_time{0.0};
+    double min_cycle_time{0.0};      ///< Shortest observed cycle [us].
+    double max_cycle_time{0.0};      ///< Longest observed cycle [us].
+    double avg_cycle_time{0.0};      ///< Running average cycle [us].
+    double current_cycle_time{0.0};  ///< Most recent cycle [us].
 
-    uint32_t dt{0};  ///< control cycle period [microseconds], e.g. 1000 = 1 kHz
+    uint32_t dt{0}; ///< Control cycle period [microseconds], e.g. 1000 = 1 kHz.
     
-    bool   resetCycleTime{false};
+    bool   resetCycleTime{false}; ///< Client request to reset cycle statistics.
 
-    int    current_state{ECAT_STATE_INIT};
-    int    request_state{ECAT_STATE_OP};
-    int    next_expected_state{};   // internal use
+    int    current_state{ECAT_STATE_INIT}; ///< Current bus state.
+    int    request_state{ECAT_STATE_OP};   ///< Client-requested state.
+    int    next_expected_state{};          ///< Internal use only.
 
-    bool   is_authorized{false};
+    bool   is_authorized{false}; ///< True when link and working counters are healthy.
 
-    int    slave_num{0};
-    Slave  slaves[MAX_SLAVE_NUM];
+    int    slave_num{0};          ///< Number of valid slaves entries.
+    Slave  slaves[MAX_SLAVE_NUM]; ///< Slave descriptors.
 };
 
 // --------------------------------------------------------------------------
@@ -129,11 +140,22 @@ struct EcatBus {
 // Client usage (singleton, auto-connects on first call):
 //   SharedMemoryConfig *cfg = SharedMemoryConfig::getInstance(id);
 // --------------------------------------------------------------------------
+/**
+ * @brief Master/client owner of the shared-memory and semaphore IPC objects.
+ *
+ * The master side instantiates directly and calls createSharedMemory() plus
+ * createPdDataMemoryProvider(). The client side uses getInstance() to
+ * auto-connect on first use.
+ */
 class SharedMemoryConfig {
 public:
     // -----------------------------------------------------------------------
     // Construction / Destruction
     // -----------------------------------------------------------------------
+    /**
+     * @brief Constructs for a non-negative master id.
+     * @param id Master id; throws std::invalid_argument when negative.
+     */
     explicit SharedMemoryConfig(int id = 0) {
         if (id < 0) {
             throw std::invalid_argument("SharedMemoryConfig requires a non-negative master id");
@@ -144,6 +166,7 @@ public:
         pdOutputName = "pd_output" + std::to_string(id);
     }
 
+    /// @brief Releases mappings, closes descriptors, and unlinks owned resources.
     ~SharedMemoryConfig() {
         releaseEcm();
         releasePdInput();
@@ -160,6 +183,11 @@ public:
     // Client singleton factory
     // Automatically calls init() (getSharedMemory + getPdDataMemoryProvider).
     // -----------------------------------------------------------------------
+    /**
+     * @brief Returns the per-id client singleton, auto-connecting on first call.
+     * @param id Master id to connect to.
+     * @return The singleton instance (never null).
+     */
     static SharedMemoryConfig *getInstance(int id = 0) {
         static std::map<int, SharedMemoryConfig *> instances;
         static std::mutex inst_mutex;
@@ -175,6 +203,10 @@ public:
     // -----------------------------------------------------------------------
     // Master-side: create (and own) shared memory objects
     // -----------------------------------------------------------------------
+    /**
+     * @brief Creates and maps the `ecm{id}` bus shared memory and its semaphores.
+     * @return True when all objects are created and mapped.
+     */
     bool createSharedMemory() {
         mode_t mask = umask(0);
 
@@ -219,6 +251,12 @@ public:
         return true;
     }
 
+    /**
+     * @brief Creates and maps the `pd_input{id}` and `pd_output{id}` PDO buffers.
+     * @param pdInputSize  Input PDO buffer size in bytes.
+     * @param pdOutputSize Output PDO buffer size in bytes.
+     * @return True on success.
+     */
     bool createPdDataMemoryProvider(int pdInputSize, int pdOutputSize) {
         if (!isValidRegionSize(pdInputSize) || !isValidRegionSize(pdOutputSize)) {
             return false;
@@ -275,7 +313,7 @@ public:
         return true;
     }
 
-    // Notify all waiting threads/processes that a new cycle is ready
+    /// @brief Notifies all waiting clients that a new cycle is ready.
     bool notifyClients() noexcept {
         bool ok = true;
         for (auto &sem : sem_mutex) {
@@ -295,6 +333,7 @@ public:
         return ok;
     }
 
+    /// @brief Compatibility wrapper for notifyClients() (misspelled name preserved).
     void updateSempahore() {
         (void)notifyClients();
     }
@@ -302,6 +341,10 @@ public:
     // -----------------------------------------------------------------------
     // Common: open existing shared memory (used by both sides)
     // -----------------------------------------------------------------------
+    /**
+     * @brief Opens and maps the existing `ecm{id}` bus shared memory and semaphores.
+     * @return True when all objects are opened and mapped.
+     */
     bool getSharedMemory() {
         closeSemaphores();
         releaseEcm();
@@ -352,6 +395,10 @@ public:
         return true;
     }
 
+    /**
+     * @brief Opens and maps the existing `pd_input{id}` and `pd_output{id}` buffers.
+     * @return True on success.
+     */
     bool getPdDataMemoryProvider() {
         releasePdInput();
         releasePdOutput();
@@ -406,7 +453,9 @@ public:
         return true;
     }
 
-    // Called by getInstance(); opens shm and PD memory for client use.
+    /**
+     * @brief Connects the client to bus and PDO shared memory (exits on failure).
+     */
     void init() {
         if (!getSharedMemory()) {
             print_message("[INIT] Cannot get shared memory.", MessageLevel::ERROR);
@@ -422,6 +471,11 @@ public:
     // -----------------------------------------------------------------------
     // Synchronisation
     // -----------------------------------------------------------------------
+    /**
+     * @brief Blocks on one semaphore slot until signaled.
+     * @param id Semaphore slot in [0, EC_SEM_NUM).
+     * @return False when the slot is invalid or sem_wait fails.
+     */
     bool waitForSignal(int id = 0) noexcept {
         if (id < 0 || id >= EC_SEM_NUM || sem_mutex[id] == nullptr || sem_mutex[id] == SEM_FAILED) {
             return false;
@@ -434,6 +488,9 @@ public:
         return true;
     }
 
+    /**
+     * @brief Assigns this thread a wait slot and blocks until notified.
+     */
     void wait() {
         int slot = -1;
         {
@@ -460,47 +517,57 @@ public:
     // -----------------------------------------------------------------------
     // EcatBus accessors (client helpers)
     // -----------------------------------------------------------------------
-    double getBusMinCycleTime()     const { return ecatBus->min_cycle_time;     }
-    double getBusMaxCycleTime()     const { return ecatBus->max_cycle_time;     }
-    double getBusAvgCycleTime()     const { return ecatBus->avg_cycle_time;     }
-    uint32_t getDt()                const { return ecatBus->dt;                 }
-    double getBusCurrentCycleTime() const { return ecatBus->current_cycle_time; }
-    bool   isAuthorized()           const { return ecatBus->is_authorized;      }
-    long   getTimestamp()           const { return ecatBus->timestamp;          }
-    int    getSlaveNum()            const { return ecatBus->slave_num;          }
-    int    getBusCurrentState()     const { return ecatBus->current_state;      }
+    double getBusMinCycleTime()     const { return ecatBus->min_cycle_time;     } ///< Minimum observed cycle [us].
+    double getBusMaxCycleTime()     const { return ecatBus->max_cycle_time;     } ///< Maximum observed cycle [us].
+    double getBusAvgCycleTime()     const { return ecatBus->avg_cycle_time;     } ///< Running average cycle [us].
+    uint32_t getDt()                const { return ecatBus->dt;                 } ///< Configured cycle period [us].
+    double getBusCurrentCycleTime() const { return ecatBus->current_cycle_time; } ///< Most recent cycle [us].
+    bool   isAuthorized()           const { return ecatBus->is_authorized;      } ///< True when bus is healthy.
+    long   getTimestamp()           const { return ecatBus->timestamp;          } ///< Last cycle monotonic timestamp [us].
+    int    getSlaveNum()            const { return ecatBus->slave_num;          } ///< Number of slaves.
+    int    getBusCurrentState()     const { return ecatBus->current_state;      } ///< Current bus state.
 
-    void resetCycleTime()                { ecatBus->resetCycleTime = true;   }
-    void setBusRequestState(int state)   { ecatBus->request_state  = state;  }
+    void resetCycleTime()                { ecatBus->resetCycleTime = true;   } ///< Requests a cycle-time reset.
+    void setBusRequestState(int state)   { ecatBus->request_state  = state;  } ///< Sets the client-requested state.
 
+    /// @brief Returns the slave name by id.
     std::string getSlaveName(int slaveId) {
         return ecatBus->slaves[slaveId].name;
     }
+    /// @brief Returns the full slave descriptor by id.
     Slave getSlave(int slaveId) {
         return ecatBus->slaves[slaveId];
     }
+    /// @brief Returns the first slave matching a name, or an empty Slave.
     Slave findSlaveByName(const std::string &name) {
         for (int i = 0; i < ecatBus->slave_num; ++i)
             if (std::string(ecatBus->slaves[i].name) == name)
                 return ecatBus->slaves[i];
         return {};
     }
+    /// @brief Returns the id of the first slave matching a name, or -1.
     int findSlaveIdByName(const std::string &name) {
         for (int i = 0; i < ecatBus->slave_num; ++i)
             if (std::string(ecatBus->slaves[i].name) == name)
                 return i;
         return -1;
     }
+    /// @brief Returns an input variable name by slave and variable id.
     std::string getInputVarName(int slaveId, int varId)  const { return ecatBus->slaves[slaveId].input_vars[varId].name;  }
+    /// @brief Returns an output variable name by slave and variable id.
     std::string getOutputVarName(int slaveId, int varId) const { return ecatBus->slaves[slaveId].output_vars[varId].name; }
+    /// @brief Returns an input variable descriptor by slave and variable id.
     PdVar getSlaveInputVar(int slaveId, int varId)  { return ecatBus->slaves[slaveId].input_vars[varId];  }
+    /// @brief Returns an output variable descriptor by slave and variable id.
     PdVar getSlaveOutputVar(int slaveId, int varId) { return ecatBus->slaves[slaveId].output_vars[varId]; }
+    /// @brief Returns the first input variable matching a name, or an empty PdVar.
     PdVar findSlaveInputVarByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].input_var_num; ++i)
             if (std::string(ecatBus->slaves[slaveId].input_vars[i].name) == name)
                 return ecatBus->slaves[slaveId].input_vars[i];
         return {};
     }
+    /// @brief Returns the id of the first input variable matching a name, or -1.
     int findSlaveInputVarIdByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].input_var_num; ++i)
             if (std::string(ecatBus->slaves[slaveId].input_vars[i].name) == name)
@@ -511,21 +578,29 @@ public:
     // -----------------------------------------------------------------------
     // Template PD access methods (by index)
     // -----------------------------------------------------------------------
+    /// @brief Reads an input variable value by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T getSlaveInputVarValue(int slaveId, int varId) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].input_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
         return *(T *)((char *)pdInputPtr + ecatBus->slaves[slaveId].input_vars[varId].offset);
     }
+    /// @brief Writes an input variable value by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> void setSlaveInputVarValue(int slaveId, int varId, T value) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].input_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
         *(T *)((char *)pdInputPtr + ecatBus->slaves[slaveId].input_vars[varId].offset) = value;
     }
+    /// @brief Reads an output variable value by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T getSlaveOutputVarValue(int slaveId, int varId) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].output_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
         return *(T *)((char *)pdOutputPtr + ecatBus->slaves[slaveId].output_vars[varId].offset);
     }
+    /// @brief Writes an output variable value by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> void setSlaveOutputVarValue(int slaveId, int varId, T value) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].output_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
@@ -533,6 +608,8 @@ public:
     }
 
     // Template PD access methods (by name)
+    /// @brief Reads an input variable value by slave id and variable name.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T getSlaveInputVarValueByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].input_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].input_vars[i].name, name.c_str()) == 0) {
@@ -542,6 +619,8 @@ public:
             }
         return std::numeric_limits<T>::max();
     }
+    /// @brief Writes an input variable value by slave id and variable name.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> void setSlaveInputVarValueByName(int slaveId, const std::string &name, T value) {
         for (int i = 0; i < ecatBus->slaves[slaveId].input_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].input_vars[i].name, name.c_str()) == 0) {
@@ -550,6 +629,8 @@ public:
                 *(T *)((char *)pdInputPtr + ecatBus->slaves[slaveId].input_vars[i].offset) = value;
             }
     }
+    /// @brief Reads an output variable value by slave id and variable name.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T getSlaveOutputVarValueByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].output_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].output_vars[i].name, name.c_str()) == 0) {
@@ -559,6 +640,8 @@ public:
             }
         return std::numeric_limits<T>::max();
     }
+    /// @brief Writes an output variable value by slave id and variable name.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> void setSlaveOutputVarValueByName(int slaveId, const std::string &name, T value) {
         for (int i = 0; i < ecatBus->slaves[slaveId].output_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].output_vars[i].name, name.c_str()) == 0) {
@@ -569,16 +652,22 @@ public:
     }
 
     // Template PD pointer methods
+    /// @brief Returns a typed pointer to an input variable by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T *getSlaveInputVarPtr(int slaveId, int varId) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].input_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
         return (T *)((char *)pdInputPtr + ecatBus->slaves[slaveId].input_vars[varId].offset);
     }
+    /// @brief Returns a typed pointer to an output variable by slave and variable id.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T *getSlaveOutputVarPtr(int slaveId, int varId) {
         if (sizeof(T) != static_cast<std::size_t>(ecatBus->slaves[slaveId].output_vars[varId].size))
             print_message("Size mismatch", MessageLevel::WARNING);
         return (T *)((char *)pdOutputPtr + ecatBus->slaves[slaveId].output_vars[varId].offset);
     }
+    /// @brief Returns a typed pointer to an input variable by name, or nullptr.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T *findSlaveInputVarPtrByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].input_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].input_vars[i].name, name.c_str()) == 0) {
@@ -588,6 +677,8 @@ public:
             }
         return nullptr;
     }
+    /// @brief Returns a typed pointer to an output variable by name, or nullptr.
+    /// @tparam T Value type; must match the variable's size in bytes.
     template<typename T> T *findSlaveOutputVarPtrByName(int slaveId, const std::string &name) {
         for (int i = 0; i < ecatBus->slaves[slaveId].output_var_num; ++i)
             if (strcmp(ecatBus->slaves[slaveId].output_vars[i].name, name.c_str()) == 0) {
@@ -601,17 +692,17 @@ public:
     // -----------------------------------------------------------------------
     // Public data (accessible by both sides for direct struct manipulation)
     // -----------------------------------------------------------------------
-    EcatBus *ecatBus    = nullptr;
-    void    *pdInputPtr  = nullptr;
-    void    *pdOutputPtr = nullptr;
-    sem_t   *sem_mutex[EC_SEM_NUM]{};
+    EcatBus *ecatBus    = nullptr; ///< Mapped bus snapshot (shared struct).
+    void    *pdInputPtr  = nullptr; ///< Mapped `pd_input{id}` buffer.
+    void    *pdOutputPtr = nullptr; ///< Mapped `pd_output{id}` buffer.
+    sem_t   *sem_mutex[EC_SEM_NUM]{}; ///< Opened named semaphores.
 
-    int         ecm_fd_{-1};
-    int         pd_input_fd_{-1};
-    int         pd_output_fd_{-1};
-    std::size_t ecm_size_{EC_SHM_MAX_SIZE};
-    std::size_t pd_input_size_{EC_SHM_MAX_SIZE};
-    std::size_t pd_output_size_{EC_SHM_MAX_SIZE};
+    int         ecm_fd_{-1};                          ///< Bus shared-memory descriptor.
+    int         pd_input_fd_{-1};                     ///< Input buffer descriptor.
+    int         pd_output_fd_{-1};                    ///< Output buffer descriptor.
+    std::size_t ecm_size_{EC_SHM_MAX_SIZE};           ///< Bus mapping size.
+    std::size_t pd_input_size_{EC_SHM_MAX_SIZE};      ///< Input mapping size.
+    std::size_t pd_output_size_{EC_SHM_MAX_SIZE};     ///< Output mapping size.
 
 private:
     std::string ecmName{EC_SHM};

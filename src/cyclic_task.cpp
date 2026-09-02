@@ -15,10 +15,12 @@ namespace {
 constexpr std::int64_t kNsecPerSec = 1000000000LL;
 constexpr std::uint32_t kMinPeriodUs = 1000U;
 
+// Converts a timespec to a single signed nanosecond count.
 std::int64_t toNanoseconds(const timespec &ts) noexcept {
     return static_cast<std::int64_t>(ts.tv_sec) * kNsecPerSec + static_cast<std::int64_t>(ts.tv_nsec);
 }
 
+// Converts a signed nanosecond count back to a normalized timespec.
 timespec fromNanoseconds(std::int64_t nanoseconds) noexcept {
     timespec ts{};
     ts.tv_sec = static_cast<time_t>(nanoseconds / kNsecPerSec);
@@ -30,10 +32,12 @@ timespec fromNanoseconds(std::int64_t nanoseconds) noexcept {
     return ts;
 }
 
+// Returns the timespec truncated to whole microseconds.
 long toMicroseconds(const timespec &ts) noexcept {
     return static_cast<long>(toNanoseconds(ts) / 1000LL);
 }
 
+// Clears the cycle count and timing aggregates, leaving missed_deadlines untouched.
 void resetTimingStatistics(CycleStatistics &statistics) noexcept {
     statistics.cycles = 0;
     statistics.minimum_us = 0.0;
@@ -42,6 +46,7 @@ void resetTimingStatistics(CycleStatistics &statistics) noexcept {
     statistics.current_us = 0.0;
 }
 
+// Folds one measured cycle duration into the running min/max/average/current stats.
 void accountCycleDuration(CycleStatistics &statistics, double duration_us) noexcept {
     statistics.current_us = duration_us;
     if (statistics.cycles == 0U) {
@@ -65,12 +70,15 @@ void accountCycleDuration(CycleStatistics &statistics, double duration_us) noexc
     statistics.cycles = next_cycle;
 }
 
+// Returns (to - from) in microseconds as a double.
 double elapsedMicroseconds(const timespec &from, const timespec &to) noexcept {
     return static_cast<double>(toNanoseconds(to) - toNanoseconds(from)) / 1000.0;
 }
 
 }  // namespace
 
+// Copies one cycle of process data between the EtherCAT domains and shared
+// memory: input flows domain -> pd_input, output flows pd_output -> domain.
 void copyProcessData(const std::uint8_t *domain_input,
                      std::size_t input_size,
                      void *shared_input,
@@ -85,6 +93,10 @@ void copyProcessData(const std::uint8_t *domain_input,
     }
 }
 
+// Computes the next absolute deadline one period after the previous one. If the
+// current time has already passed one or more periods, it skips ahead to the
+// first future deadline and reports the missed interval count instead of
+// catching up on every skipped cycle.
 timespec advanceDeadline(const timespec &previous_deadline,
                          std::uint32_t period_us,
                          const timespec &now,
@@ -109,6 +121,9 @@ timespec advanceDeadline(const timespec &previous_deadline,
 }
 
 #if ROCOS_IGH_BUILD_MASTER
+// Publishes one cycle's state and timing into the shared EcatBus snapshot.
+// Honors a pending resetCycleTime request and marks is_authorized only when the
+// link is up, all slaves respond, and both domain working counters are complete.
 void updateSharedBus(const BusState &state,
                      CycleStatistics &statistics,
                      std::uint32_t period_us,
@@ -136,9 +151,13 @@ void updateSharedBus(const BusState &state,
                         state.output_wc_state == EC_WC_COMPLETE;
 }
 
+// Binds the task to an initialized master and mapped IPC for the given period.
 CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us) noexcept
     : master_(master), ipc_(ipc), period_us_(period_us) {}
 
+// Runs the absolute-time cyclic loop until stop_requested is set. Each wake
+// performs receive/process, the two fixed-buffer copies, state publication,
+// queue/send, and client notification, then advances the deadline.
 int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     if (period_us_ < kMinPeriodUs) {
         return EINVAL;
@@ -197,20 +216,27 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     return 0;
 }
 
+// Returns the accumulated cycle statistics collected during run().
 const CycleStatistics &CyclicTask::statistics() const noexcept {
     return statistics_;
 }
 
 #else
+// Hardware-free build: there is no EtherCAT master to drive, so the cyclic
+// task degrades to stubs that keep the IPC-only library linkable.
+
+// No shared bus state to publish in this configuration.
 void updateSharedBus(const BusState &,
                      CycleStatistics &,
                      std::uint32_t,
                      long,
                      EcatBus &) noexcept {}
 
+// Binds the task to an initialized master and mapped IPC for the given period.
 CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us) noexcept
     : master_(master), ipc_(ipc), period_us_(period_us) {}
 
+// Rejects sub-1ms periods, then reports the feature as unsupported.
 int CyclicTask::run(volatile std::sig_atomic_t &) noexcept {
     if (period_us_ < kMinPeriodUs) {
         return EINVAL;
@@ -218,6 +244,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &) noexcept {
     return ENOTSUP;
 }
 
+// Returns the (always empty) cycle statistics collected during run().
 const CycleStatistics &CyclicTask::statistics() const noexcept {
     return statistics_;
 }

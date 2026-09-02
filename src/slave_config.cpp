@@ -8,10 +8,14 @@
 
 namespace rocos {
 
+// Returns the (currently empty) default slave table; a real deployment adds a
+// device-specific StaticSlaveConfig here before the master can start.
 StaticSlaveConfig defaultSlaveConfig() noexcept {
     return {nullptr, 0};
 }
 
+// Validates a static configuration structurally and returns the first exact
+// failure in `error` (empty config is valid).
 bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) noexcept {
     try {
         error.clear();
@@ -91,6 +95,8 @@ bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) no
     }
 }
 
+// Copies the static configuration into the shared EcatBus metadata (slave and
+// PDO variable names, offsets, sizes, indices) for client processes to read.
 bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &error) noexcept {
     try {
         error.clear();

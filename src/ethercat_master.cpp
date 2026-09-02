@@ -4,10 +4,14 @@
 
 namespace rocos {
 
+// Releases the requested IgH master and drops all borrowed pointers.
 EthercatMaster::~EthercatMaster() {
     reset();
 }
 
+// Requests the IgH master, creates one input and one output domain, configures
+// each slave and registers its PDO entries, then activates the master and caches
+// both domain buffers and sizes. Fails fast with reset() on any error.
 bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config, std::string &error) {
     error.clear();
 
@@ -117,6 +121,7 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
     return true;
 }
 
+// Receives a frame and processes both domains' working counters (rt_safe).
 void EthercatMaster::receiveAndProcess() noexcept {
     if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
         return;
@@ -127,6 +132,7 @@ void EthercatMaster::receiveAndProcess() noexcept {
     (void)ecrt_domain_process(output_domain_);
 }
 
+// Re-queues both domains and sends all queued datagrams (rt_safe).
 void EthercatMaster::queueAndSend() noexcept {
     if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
         return;
@@ -137,6 +143,7 @@ void EthercatMaster::queueAndSend() noexcept {
     (void)ecrt_master_send(master_);
 }
 
+// Snapshots master and domain state into a value object without allocation.
 BusState EthercatMaster::readState() noexcept {
     BusState state{};
     if (!initialized_) {
@@ -162,26 +169,32 @@ BusState EthercatMaster::readState() noexcept {
     return state;
 }
 
+// Returns the cached input-domain process-data base pointer.
 std::uint8_t *EthercatMaster::inputData() noexcept {
     return input_data_;
 }
 
+// Returns the cached output-domain process-data base pointer.
 std::uint8_t *EthercatMaster::outputData() noexcept {
     return output_data_;
 }
 
+// Returns the input-domain process-data size in bytes.
 std::size_t EthercatMaster::inputSize() const noexcept {
     return input_size_;
 }
 
+// Returns the output-domain process-data size in bytes.
 std::size_t EthercatMaster::outputSize() const noexcept {
     return output_size_;
 }
 
+// Returns true once initialize() has completed successfully.
 bool EthercatMaster::initialized() const noexcept {
     return initialized_;
 }
 
+// Releases the master at most once and nulls every borrowed pointer and domain.
 void EthercatMaster::reset() noexcept {
     input_data_ = nullptr;
     output_data_ = nullptr;

@@ -8,8 +8,9 @@
 
 ## 当前状态
 
-- 当前唯一实现是 [src/shared_memory_config.hpp](src/shared_memory_config.hpp)，包含共享数据结构和主站/客户端 IPC 接口。
-- [CMakeLists.txt](CMakeLists.txt)、[cmake/FindEtherCAT.make](cmake/FindEtherCAT.make) 和 [tests](tests) 尚未实现。不要声称已有可用构建目标或测试命令；新增功能时同时补齐相应 CMake 目标和 CTest 测试。
+- 最小主站骨架已实现：进程入口 [src/main.cpp](src/main.cpp)、IgH 生命周期 [src/ethercat_master.cpp](src/ethercat_master.cpp)、绝对时间周期任务 [src/cyclic_task.cpp](src/cyclic_task.cpp)、编译期从站配置 [src/slave_config.cpp](src/slave_config.cpp)、命令行解析 [src/runtime_options.cpp](src/runtime_options.cpp)，以及 IPC/共享 ABI [src/shared_memory_config.hpp](src/shared_memory_config.hpp)。
+- 构建目标已就绪：`rocos_igh_core`（主站模式下静态库、无硬件模式下接口库）、`rocos_igh_master`（可执行）和 `shared_memory_config_test`（CTest）。两种构建模式与命令见 [README.md](README.md)。
+- 默认从站配置为空（`defaultSlaveConfig()` 返回 0 从站），`rocos_igh_master` 启动即退出并报 `no slave configuration compiled`；接入真实从站需在 [src/slave_config.cpp](src/slave_config.cpp) 添加 `StaticSlaveConfig` 静态表并同步测试。
 - `.vscode` 中的 ROS 2 设置不是项目依赖依据；除非构建文件明确引入，否则不要添加 ROS 依赖。
 
 ## 架构约束
@@ -25,8 +26,8 @@
 
 ## 构建与验证
 
-- 使用现代、目标导向的 CMake，要求 C++17；保持 out-of-source 构建，并通过 CMake 查找 IgH 的 `ecrt.h` 和 `ethercat` 库，不要硬编码本机路径。
-- CMake 基础设施完成后，标准验证入口应为 `cmake -S . -B build`、`cmake --build build` 和 `ctest --test-dir build --output-on-failure`。
+- 使用现代、目标导向的 CMake，要求 C++17；保持 out-of-source 构建，并通过 [cmake/FindEtherCAT.cmake](cmake/FindEtherCAT.cmake) 查找 IgH 的 `ecrt.h` 和 `ethercat` 库，不要硬编码本机路径。
+- 标准验证入口（`ROCOS_IGH_BUILD_MASTER` 控制两种模式）：无硬件模式 `cmake -S . -B build -DROCOS_IGH_BUILD_MASTER=OFF && cmake --build build && ctest --test-dir build --output-on-failure`；主站模式 `cmake -S . -B build-master -DROCOS_IGH_BUILD_MASTER=ON && cmake --build build-master && ctest --test-dir build-master --output-on-failure`。
 - 不依赖硬件的测试应使用唯一主站 ID 创建共享内存，验证 PDO 读写、信号量通知、多主站隔离和资源清理。
 - 需要已加载 IgH 内核模块、实时权限或真实从站的测试必须单独标记为硬件集成测试，不得默认运行。诊断与设备安全注意事项见 [docs/ethercat-terminal-commands.md](docs/ethercat-terminal-commands.md)。
 
