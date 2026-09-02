@@ -10,9 +10,7 @@
 
 namespace rocos {
 
-#ifdef ROCOS_IGH_TESTING
 struct EthercatMasterTestPeer;
-#endif
 
 struct BusState {
     unsigned int responding_slaves{0};
@@ -45,9 +43,7 @@ public:
     bool initialized() const noexcept;
 
 private:
-#ifdef ROCOS_IGH_TESTING
     friend struct EthercatMasterTestPeer;
-#endif
 
     void reset() noexcept;
 
