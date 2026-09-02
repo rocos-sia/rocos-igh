@@ -27,6 +27,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <thread>
+#include <mutex>
 #include <unistd.h>
 #include <vector>
 
