@@ -40,6 +40,15 @@ bool testInvalidArguments() {
     CHECK(owner.createSharedMemory());
     CHECK(!owner.createPdDataMemoryProvider(0, 8));
     CHECK(!owner.createPdDataMemoryProvider(8, -1));
+    CHECK(!owner.createPdDataMemoryProvider(EC_SHM_MAX_SIZE + 1, 8));
+    return true;
+}
+
+bool testClientRequiresExistingOwner() {
+    const int id = uniqueMasterId() + 1000;
+    rocos::SharedMemoryConfig client(id);
+    CHECK(!client.getSharedMemory());
+    CHECK(!client.getPdDataMemoryProvider());
     return true;
 }
 
@@ -112,12 +121,37 @@ bool testSecondOwnerIsolation() {
     return true;
 }
 
+bool testDuplicateOwnerRejected() {
+    const int id = uniqueMasterId();
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(owner.createSharedMemory());
+    CHECK(owner.createPdDataMemoryProvider(16, 16));
+
+    rocos::SharedMemoryConfig client(id);
+    CHECK(client.getSharedMemory());
+    CHECK(client.getPdDataMemoryProvider());
+
+    rocos::SharedMemoryConfig duplicate(id);
+    CHECK(!duplicate.createSharedMemory());
+    CHECK(!duplicate.createPdDataMemoryProvider(16, 16));
+
+    const std::uint32_t pattern = 0xCAFEBABEU;
+    std::memcpy(owner.pdInputPtr, &pattern, sizeof(pattern));
+
+    std::uint32_t observed = 0;
+    std::memcpy(&observed, client.pdInputPtr, sizeof(observed));
+    CHECK(observed == pattern);
+    return true;
+}
+
 }  // namespace
 
 int main() {
     CHECK(testEcatBusDefaults());
     CHECK(testInvalidArguments());
+    CHECK(testClientRequiresExistingOwner());
     CHECK(testMasterClientExchange());
     CHECK(testSecondOwnerIsolation());
+    CHECK(testDuplicateOwnerRejected());
     return 0;
 }

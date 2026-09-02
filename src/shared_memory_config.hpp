@@ -178,12 +178,10 @@ public:
     bool createSharedMemory() {
         mode_t mask = umask(0);
 
-        releaseEcm();
-        closeSemaphores();
-        unlinkOwnedResources();
+        rollbackOwnedEcm();
+        rollbackOwnedSemaphores();
 
         const std::string shm_name = toPosixName(ecmName);
-        shm_unlink(shm_name.c_str());
 
         ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (ecm_fd_ < 0) {
@@ -193,13 +191,13 @@ public:
         owns_ecm_ = true;
         if (ftruncate(ecm_fd_, static_cast<off_t>(ecm_size_)) != 0) {
             print_message("[SHM] Cannot resize " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            releaseEcm();
+            rollbackOwnedEcm();
             umask(mask); return false;
         }
         void *addr = mmap(nullptr, ecm_size_, PROT_READ | PROT_WRITE, MAP_SHARED, ecm_fd_, 0);
         if (addr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            releaseEcm();
+            rollbackOwnedEcm();
             umask(mask); return false;
         }
         ecatBus  = static_cast<EcatBus *>(addr);
@@ -207,12 +205,11 @@ public:
 
         for (int i = 0; i < EC_SEM_NUM; i++) {
             const std::string semName = semaphoreName(i);
-            sem_unlink(semName.c_str());
             sem_mutex[i] = sem_open(semName.c_str(), O_CREAT | O_EXCL, 0660, 0);
             if (sem_mutex[i] == SEM_FAILED) {
                 print_message("[SHM] Cannot create semaphore " + semName, MessageLevel::ERROR);
-                closeSemaphores();
-                releaseEcm();
+                rollbackCreatedSemaphores(i);
+                rollbackOwnedEcm();
                 umask(mask); return false;
             }
         }
@@ -227,13 +224,11 @@ public:
             return false;
         }
 
-        releasePdInput();
-        releasePdOutput();
+        rollbackOwnedPdInput();
+        rollbackOwnedPdOutput();
 
         const std::string pd_in  = toPosixName(pdInputName);
         const std::string pd_out = toPosixName(pdOutputName);
-        shm_unlink(pd_in.c_str());
-        shm_unlink(pd_out.c_str());
 
         pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (pd_input_fd_ < 0) {
@@ -243,14 +238,14 @@ public:
         owns_pd_input_ = true;
         if (ftruncate(pd_input_fd_, static_cast<off_t>(pdInputSize)) != 0) {
             print_message("[SHM] Cannot resize " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
-            releasePdInput();
+            rollbackOwnedPdInput();
             return false;
         }
         pdInputPtr = mmap(nullptr, static_cast<std::size_t>(pdInputSize), PROT_READ | PROT_WRITE, MAP_SHARED, pd_input_fd_, 0);
         if (pdInputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
             pdInputPtr = nullptr;
-            releasePdInput();
+            rollbackOwnedPdInput();
             return false;
         }
         pd_input_size_ = static_cast<std::size_t>(pdInputSize);
@@ -258,22 +253,22 @@ public:
         pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (pd_output_fd_ < 0) {
             print_message("[SHM] Cannot create " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            releasePdInput();
+            rollbackOwnedPdInput();
             return false;
         }
         owns_pd_output_ = true;
         if (ftruncate(pd_output_fd_, static_cast<off_t>(pdOutputSize)) != 0) {
             print_message("[SHM] Cannot resize " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            releasePdOutput();
-            releasePdInput();
+            rollbackOwnedPdOutput();
+            rollbackOwnedPdInput();
             return false;
         }
         pdOutputPtr = mmap(nullptr, static_cast<std::size_t>(pdOutputSize), PROT_READ | PROT_WRITE, MAP_SHARED, pd_output_fd_, 0);
         if (pdOutputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
             pdOutputPtr = nullptr;
-            releasePdOutput();
-            releasePdInput();
+            rollbackOwnedPdOutput();
+            rollbackOwnedPdInput();
             return false;
         }
         pd_output_size_ = static_cast<std::size_t>(pdOutputSize);
@@ -692,6 +687,21 @@ private:
         }
     }
 
+    void rollbackCreatedSemaphores(int count) noexcept {
+        for (int i = 0; i < count; ++i) {
+            if (sem_mutex[i] != nullptr && sem_mutex[i] != SEM_FAILED) {
+                if (sem_close(sem_mutex[i]) != 0) {
+                    print_message("[SHM] Cannot close semaphore: " + std::string(std::strerror(errno)), MessageLevel::ERROR);
+                }
+            }
+            sem_mutex[i] = nullptr;
+            const std::string semName = semaphoreName(i);
+            if (sem_unlink(semName.c_str()) != 0 && errno != ENOENT) {
+                print_message("[SHM] Cannot unlink semaphore " + semName + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+        }
+    }
+
     void unlinkOwnedResources() noexcept {
         if (owns_semaphores_) {
             for (int i = 0; i < EC_SEM_NUM; ++i) {
@@ -719,6 +729,43 @@ private:
     void unlinkSharedMemory(const std::string &name) const noexcept {
         if (shm_unlink(name.c_str()) != 0 && errno != ENOENT) {
             print_message("[SHM] Cannot unlink " + name + ": " + std::strerror(errno), MessageLevel::ERROR);
+        }
+    }
+
+    void rollbackOwnedEcm() noexcept {
+        releaseEcm();
+        if (owns_ecm_) {
+            unlinkSharedMemory(toPosixName(ecmName));
+            owns_ecm_ = false;
+        }
+    }
+
+    void rollbackOwnedPdInput() noexcept {
+        releasePdInput();
+        if (owns_pd_input_) {
+            unlinkSharedMemory(toPosixName(pdInputName));
+            owns_pd_input_ = false;
+        }
+    }
+
+    void rollbackOwnedPdOutput() noexcept {
+        releasePdOutput();
+        if (owns_pd_output_) {
+            unlinkSharedMemory(toPosixName(pdOutputName));
+            owns_pd_output_ = false;
+        }
+    }
+
+    void rollbackOwnedSemaphores() noexcept {
+        closeSemaphores();
+        if (owns_semaphores_) {
+            for (int i = 0; i < EC_SEM_NUM; ++i) {
+                const std::string semName = semaphoreName(i);
+                if (sem_unlink(semName.c_str()) != 0 && errno != ENOENT) {
+                    print_message("[SHM] Cannot unlink semaphore " + semName + ": " + std::strerror(errno), MessageLevel::ERROR);
+                }
+            }
+            owns_semaphores_ = false;
         }
     }
 
