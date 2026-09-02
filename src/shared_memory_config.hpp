@@ -28,6 +28,7 @@
 #include <sys/stat.h>
 #include <thread>
 #include <mutex>
+#include <stdexcept>
 #include <unistd.h>
 #include <vector>
 
@@ -134,6 +135,9 @@ public:
     // Construction / Destruction
     // -----------------------------------------------------------------------
     explicit SharedMemoryConfig(int id = 0) {
+        if (id < 0) {
+            throw std::invalid_argument("SharedMemoryConfig requires a non-negative master id");
+        }
         ecmName     = EC_SHM      + std::to_string(id);
         mutexName   = EC_SEM_MUTEX + std::to_string(id) + "_";
         pdInputName  = "pd_input"  + std::to_string(id);
@@ -141,31 +145,11 @@ public:
     }
 
     ~SharedMemoryConfig() {
-        if (ecatBus != nullptr) {
-            if (munmap(ecatBus, ecm_size_) != 0)
-                print_message("[SHM] Cannot unmap " + ecmName + ": " + std::strerror(errno), MessageLevel::ERROR);
-            ecatBus = nullptr;
-        }
-        if (pdInputPtr != nullptr) {
-            if (munmap(pdInputPtr, pd_input_size_) != 0)
-                print_message("[SHM] Cannot unmap " + pdInputName + ": " + std::strerror(errno), MessageLevel::ERROR);
-            pdInputPtr = nullptr;
-        }
-        if (pdOutputPtr != nullptr) {
-            if (munmap(pdOutputPtr, pd_output_size_) != 0)
-                print_message("[SHM] Cannot unmap " + pdOutputName + ": " + std::strerror(errno), MessageLevel::ERROR);
-            pdOutputPtr = nullptr;
-        }
-        if (ecm_fd_       >= 0) { close(ecm_fd_);       ecm_fd_       = -1; }
-        if (pd_input_fd_  >= 0) { close(pd_input_fd_);  pd_input_fd_  = -1; }
-        if (pd_output_fd_ >= 0) { close(pd_output_fd_); pd_output_fd_ = -1; }
-        for (auto &mutex : sem_mutex) {
-            if (mutex != nullptr && mutex != SEM_FAILED) {
-                if (sem_close(mutex) != 0)
-                    print_message("[SHM] Cannot close semaphore: " + std::string(std::strerror(errno)), MessageLevel::ERROR);
-                mutex = nullptr;
-            }
-        }
+        releaseEcm();
+        releasePdInput();
+        releasePdOutput();
+        closeSemaphores();
+        unlinkOwnedResources();
     }
 
     // Non-copyable, non-movable (owns OS resources)
@@ -194,198 +178,235 @@ public:
     bool createSharedMemory() {
         mode_t mask = umask(0);
 
+        releaseEcm();
+        closeSemaphores();
+        unlinkOwnedResources();
+
         const std::string shm_name = toPosixName(ecmName);
         shm_unlink(shm_name.c_str());
 
-        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (ecm_fd_ < 0) {
             print_message("[SHM] Cannot create " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
             umask(mask); return false;
         }
+        owns_ecm_ = true;
         if (ftruncate(ecm_fd_, static_cast<off_t>(ecm_size_)) != 0) {
             print_message("[SHM] Cannot resize " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(ecm_fd_); ecm_fd_ = -1; umask(mask); return false;
+            releaseEcm();
+            umask(mask); return false;
         }
         void *addr = mmap(nullptr, ecm_size_, PROT_READ | PROT_WRITE, MAP_SHARED, ecm_fd_, 0);
         if (addr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(ecm_fd_); ecm_fd_ = -1; umask(mask); return false;
+            releaseEcm();
+            umask(mask); return false;
         }
         ecatBus  = static_cast<EcatBus *>(addr);
         *ecatBus = EcatBus{};  // zero-initialise
 
         for (int i = 0; i < EC_SEM_NUM; i++) {
-            std::string semName = mutexName + std::to_string(i);
-            sem_mutex[i] = sem_open(semName.c_str(), O_CREAT | O_RDWR, 0777, 1);
+            const std::string semName = semaphoreName(i);
+            sem_unlink(semName.c_str());
+            sem_mutex[i] = sem_open(semName.c_str(), O_CREAT | O_EXCL, 0660, 0);
             if (sem_mutex[i] == SEM_FAILED) {
                 print_message("[SHM] Cannot create semaphore " + semName, MessageLevel::ERROR);
-                umask(mask); return false;
-            }
-            int val = 0;
-            sem_getvalue(sem_mutex[i], &val);
-            if (val != 1) {
-                sem_destroy(sem_mutex[i]);
-                sem_unlink(semName.c_str());
-                sem_mutex[i] = sem_open(semName.c_str(), O_CREAT | O_RDWR, 0777, 1);
-            }
-            sem_getvalue(sem_mutex[i], &val);
-            if (val != 1) {
-                print_message("[SHM] Cannot set semaphore " + semName + " to 1", MessageLevel::ERROR);
+                closeSemaphores();
+                releaseEcm();
                 umask(mask); return false;
             }
         }
+        owns_semaphores_ = true;
 
         umask(mask);
         return true;
     }
 
     bool createPdDataMemoryProvider(int pdInputSize, int pdOutputSize) {
+        if (!isValidRegionSize(pdInputSize) || !isValidRegionSize(pdOutputSize)) {
+            return false;
+        }
+
+        releasePdInput();
+        releasePdOutput();
+
         const std::string pd_in  = toPosixName(pdInputName);
         const std::string pd_out = toPosixName(pdOutputName);
         shm_unlink(pd_in.c_str());
         shm_unlink(pd_out.c_str());
 
-        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (pd_input_fd_ < 0) {
             print_message("[SHM] Cannot create " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
             return false;
         }
+        owns_pd_input_ = true;
         if (ftruncate(pd_input_fd_, static_cast<off_t>(pdInputSize)) != 0) {
             print_message("[SHM] Cannot resize " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(pd_input_fd_); pd_input_fd_ = -1; return false;
+            releasePdInput();
+            return false;
         }
         pdInputPtr = mmap(nullptr, static_cast<std::size_t>(pdInputSize), PROT_READ | PROT_WRITE, MAP_SHARED, pd_input_fd_, 0);
         if (pdInputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(pd_input_fd_); pd_input_fd_ = -1; pdInputPtr = nullptr; return false;
+            pdInputPtr = nullptr;
+            releasePdInput();
+            return false;
         }
         pd_input_size_ = static_cast<std::size_t>(pdInputSize);
 
-        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666);
+        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (pd_output_fd_ < 0) {
             print_message("[SHM] Cannot create " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            munmap(pdInputPtr, pd_input_size_); pdInputPtr = nullptr;
-            close(pd_input_fd_); pd_input_fd_ = -1; return false;
+            releasePdInput();
+            return false;
         }
+        owns_pd_output_ = true;
         if (ftruncate(pd_output_fd_, static_cast<off_t>(pdOutputSize)) != 0) {
             print_message("[SHM] Cannot resize " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            munmap(pdInputPtr, pd_input_size_); pdInputPtr = nullptr;
-            close(pd_input_fd_); pd_input_fd_ = -1;
-            close(pd_output_fd_); pd_output_fd_ = -1; return false;
+            releasePdOutput();
+            releasePdInput();
+            return false;
         }
         pdOutputPtr = mmap(nullptr, static_cast<std::size_t>(pdOutputSize), PROT_READ | PROT_WRITE, MAP_SHARED, pd_output_fd_, 0);
         if (pdOutputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            munmap(pdInputPtr, pd_input_size_); pdInputPtr = nullptr;
-            close(pd_input_fd_); pd_input_fd_ = -1;
-            close(pd_output_fd_); pd_output_fd_ = -1; pdOutputPtr = nullptr; return false;
+            pdOutputPtr = nullptr;
+            releasePdOutput();
+            releasePdInput();
+            return false;
         }
         pd_output_size_ = static_cast<std::size_t>(pdOutputSize);
         return true;
     }
 
     // Notify all waiting threads/processes that a new cycle is ready
-    void updateSempahore() {
+    bool notifyClients() noexcept {
+        bool ok = true;
         for (auto &sem : sem_mutex) {
+            if (sem == nullptr || sem == SEM_FAILED) {
+                ok = false;
+                continue;
+            }
             int val = 0;
-            sem_getvalue(sem, &val);
-            if (val < 1) sem_post(sem);
+            if (sem_getvalue(sem, &val) != 0) {
+                ok = false;
+                continue;
+            }
+            if (val < 1 && sem_post(sem) != 0) {
+                ok = false;
+            }
         }
+        return ok;
+    }
+
+    void updateSempahore() {
+        (void)notifyClients();
     }
 
     // -----------------------------------------------------------------------
     // Common: open existing shared memory (used by both sides)
     // -----------------------------------------------------------------------
     bool getSharedMemory() {
-        mode_t mask = umask(0);
+        closeSemaphores();
+        releaseEcm();
 
         for (int i = 0; i < EC_SEM_NUM; i++) {
-            sem_mutex[i] = sem_open((mutexName + std::to_string(i)).c_str(), O_CREAT, 0777, 1);
+            const std::string semName = semaphoreName(i);
+            sem_mutex[i] = sem_open(semName.c_str(), 0);
             if (sem_mutex[i] == SEM_FAILED) {
-                print_message("[SHM] Cannot open semaphore " + mutexName + std::to_string(i), MessageLevel::ERROR);
-                umask(mask); return false;
+                print_message("[SHM] Cannot open semaphore " + semName, MessageLevel::ERROR);
+                closeSemaphores();
+                return false;
             }
         }
 
         const std::string shm_name = toPosixName(ecmName);
-        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT, 0666);
+        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR, 0);
         if (ecm_fd_ < 0) {
             print_message("[SHM] Cannot open " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            umask(mask); return false;
+            closeSemaphores();
+            return false;
         }
 
         struct stat st{};
         if (fstat(ecm_fd_, &st) != 0) {
             print_message("[SHM] Cannot stat " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(ecm_fd_); ecm_fd_ = -1; umask(mask); return false;
+            releaseEcm();
+            closeSemaphores();
+            return false;
         }
 
-        if (st.st_size < static_cast<off_t>(ecm_size_)) {
-            print_message("[SHM] Ec-Master is not running.", MessageLevel::WARNING);
-            if (ftruncate(ecm_fd_, static_cast<off_t>(ecm_size_)) != 0) {
-                print_message("[SHM] Cannot resize " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-                close(ecm_fd_); ecm_fd_ = -1; umask(mask); return false;
-            }
+        if (!isValidMappedSize(st.st_size) || static_cast<std::size_t>(st.st_size) < sizeof(EcatBus)) {
+            print_message("[SHM] Invalid size for " + shm_name, MessageLevel::ERROR);
+            releaseEcm();
+            closeSemaphores();
+            return false;
         }
+        ecm_size_ = static_cast<std::size_t>(st.st_size);
 
         void *addr = mmap(nullptr, ecm_size_, PROT_READ | PROT_WRITE, MAP_SHARED, ecm_fd_, 0);
         if (addr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(ecm_fd_); ecm_fd_ = -1; umask(mask); return false;
+            releaseEcm();
+            closeSemaphores();
+            return false;
         }
         ecatBus = static_cast<EcatBus *>(addr);
 
-        umask(mask);
         return true;
     }
 
     bool getPdDataMemoryProvider() {
+        releasePdInput();
+        releasePdOutput();
+
         const std::string pd_in  = toPosixName(pdInputName);
         const std::string pd_out = toPosixName(pdOutputName);
 
-        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT, 0666);
+        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR, 0);
         if (pd_input_fd_ < 0) {
             print_message("[SHM] Cannot open " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
             return false;
         }
         struct stat st_in{};
-        fstat(pd_input_fd_, &st_in);
-        if (st_in.st_size == 0) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-result"
-            ftruncate(pd_input_fd_, static_cast<off_t>(pd_input_size_));
-#pragma GCC diagnostic pop
-        } else
-            pd_input_size_ = static_cast<std::size_t>(st_in.st_size);
+        if (fstat(pd_input_fd_, &st_in) != 0 || !isValidMappedSize(st_in.st_size)) {
+            print_message("[SHM] Invalid size for " + pd_in, MessageLevel::ERROR);
+            releasePdInput();
+            return false;
+        }
+        pd_input_size_ = static_cast<std::size_t>(st_in.st_size);
 
         pdInputPtr = mmap(nullptr, pd_input_size_, PROT_READ | PROT_WRITE, MAP_SHARED, pd_input_fd_, 0);
         if (pdInputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
-            close(pd_input_fd_); pd_input_fd_ = -1; pdInputPtr = nullptr; return false;
+            pdInputPtr = nullptr;
+            releasePdInput();
+            return false;
         }
 
-        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT, 0666);
+        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR, 0);
         if (pd_output_fd_ < 0) {
             print_message("[SHM] Cannot open " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            munmap(pdInputPtr, pd_input_size_); pdInputPtr = nullptr;
-            close(pd_input_fd_); pd_input_fd_ = -1; return false;
+            releasePdInput();
+            return false;
         }
         struct stat st_out{};
-        fstat(pd_output_fd_, &st_out);
-        if (st_out.st_size == 0) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-result"
-            ftruncate(pd_output_fd_, static_cast<off_t>(pd_output_size_));
-#pragma GCC diagnostic pop
-        } else
-            pd_output_size_ = static_cast<std::size_t>(st_out.st_size);
+        if (fstat(pd_output_fd_, &st_out) != 0 || !isValidMappedSize(st_out.st_size)) {
+            print_message("[SHM] Invalid size for " + pd_out, MessageLevel::ERROR);
+            releasePdOutput();
+            releasePdInput();
+            return false;
+        }
+        pd_output_size_ = static_cast<std::size_t>(st_out.st_size);
 
         pdOutputPtr = mmap(nullptr, pd_output_size_, PROT_READ | PROT_WRITE, MAP_SHARED, pd_output_fd_, 0);
         if (pdOutputPtr == MAP_FAILED) {
             print_message("[SHM] Cannot map " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
-            munmap(pdInputPtr, pd_input_size_); pdInputPtr = nullptr;
-            close(pd_input_fd_); pd_input_fd_ = -1;
-            close(pd_output_fd_); pd_output_fd_ = -1; pdOutputPtr = nullptr; return false;
+            pdOutputPtr = nullptr;
+            releasePdOutput();
+            releasePdInput();
+            return false;
         }
         return true;
     }
@@ -403,22 +424,34 @@ public:
     // -----------------------------------------------------------------------
     // Synchronisation
     // -----------------------------------------------------------------------
-    void waitForSignal(int id = 0) {
-        sem_wait(sem_mutex[id]);
+    bool waitForSignal(int id = 0) noexcept {
+        if (id < 0 || id >= EC_SEM_NUM || sem_mutex[id] == nullptr || sem_mutex[id] == SEM_FAILED) {
+            return false;
+        }
+        while (sem_wait(sem_mutex[id]) != 0) {
+            if (errno != EINTR) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void wait() {
         auto id = std::this_thread::get_id();
         auto it = std::find(threadId_.begin(), threadId_.end(), id);
         if (it != threadId_.end()) {
-            waitForSignal(static_cast<int>(std::distance(threadId_.begin(), it)));
+            if (!waitForSignal(static_cast<int>(std::distance(threadId_.begin(), it)))) {
+                print_message("[SHM] Failed waiting on semaphore.", MessageLevel::ERROR);
+            }
         } else {
             if (threadId_.size() >= EC_SEM_NUM) {
                 print_message("[SHM] Too many threads.", MessageLevel::ERROR);
                 return;
             }
             threadId_.push_back(id);
-            waitForSignal(static_cast<int>(threadId_.size() - 1));
+            if (!waitForSignal(static_cast<int>(threadId_.size() - 1))) {
+                print_message("[SHM] Failed waiting on semaphore.", MessageLevel::ERROR);
+            }
         }
     }
 
@@ -583,14 +616,110 @@ private:
     std::string mutexName{EC_SEM_MUTEX};
     std::string pdInputName{"pd_input"};
     std::string pdOutputName{"pd_output"};
+    bool owns_ecm_{false};
+    bool owns_pd_input_{false};
+    bool owns_pd_output_{false};
+    bool owns_semaphores_{false};
 
     std::vector<std::thread::id> threadId_;
 
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+    std::string semaphoreName(int index) const {
+        return toPosixName(mutexName + std::to_string(index));
+    }
+
     static std::string toPosixName(const std::string &name) {
         return (name.front() == '/') ? name : "/" + name;
+    }
+
+    static bool isValidRegionSize(int size) {
+        return size > 0 && size <= EC_SHM_MAX_SIZE;
+    }
+
+    static bool isValidMappedSize(off_t size) {
+        return size > 0 && size <= static_cast<off_t>(EC_SHM_MAX_SIZE);
+    }
+
+    void releaseEcm() noexcept {
+        if (ecatBus != nullptr) {
+            if (munmap(ecatBus, ecm_size_) != 0) {
+                print_message("[SHM] Cannot unmap " + ecmName + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            ecatBus = nullptr;
+        }
+        if (ecm_fd_ >= 0) {
+            close(ecm_fd_);
+            ecm_fd_ = -1;
+        }
+    }
+
+    void releasePdInput() noexcept {
+        if (pdInputPtr != nullptr) {
+            if (munmap(pdInputPtr, pd_input_size_) != 0) {
+                print_message("[SHM] Cannot unmap " + pdInputName + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            pdInputPtr = nullptr;
+        }
+        if (pd_input_fd_ >= 0) {
+            close(pd_input_fd_);
+            pd_input_fd_ = -1;
+        }
+    }
+
+    void releasePdOutput() noexcept {
+        if (pdOutputPtr != nullptr) {
+            if (munmap(pdOutputPtr, pd_output_size_) != 0) {
+                print_message("[SHM] Cannot unmap " + pdOutputName + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            pdOutputPtr = nullptr;
+        }
+        if (pd_output_fd_ >= 0) {
+            close(pd_output_fd_);
+            pd_output_fd_ = -1;
+        }
+    }
+
+    void closeSemaphores() noexcept {
+        for (auto &mutex : sem_mutex) {
+            if (mutex != nullptr && mutex != SEM_FAILED) {
+                if (sem_close(mutex) != 0) {
+                    print_message("[SHM] Cannot close semaphore: " + std::string(std::strerror(errno)), MessageLevel::ERROR);
+                }
+            }
+            mutex = nullptr;
+        }
+    }
+
+    void unlinkOwnedResources() noexcept {
+        if (owns_semaphores_) {
+            for (int i = 0; i < EC_SEM_NUM; ++i) {
+                const std::string semName = semaphoreName(i);
+                if (sem_unlink(semName.c_str()) != 0 && errno != ENOENT) {
+                    print_message("[SHM] Cannot unlink semaphore " + semName + ": " + std::strerror(errno), MessageLevel::ERROR);
+                }
+            }
+            owns_semaphores_ = false;
+        }
+        if (owns_ecm_) {
+            unlinkSharedMemory(toPosixName(ecmName));
+            owns_ecm_ = false;
+        }
+        if (owns_pd_input_) {
+            unlinkSharedMemory(toPosixName(pdInputName));
+            owns_pd_input_ = false;
+        }
+        if (owns_pd_output_) {
+            unlinkSharedMemory(toPosixName(pdOutputName));
+            owns_pd_output_ = false;
+        }
+    }
+
+    void unlinkSharedMemory(const std::string &name) const noexcept {
+        if (shm_unlink(name.c_str()) != 0 && errno != ENOENT) {
+            print_message("[SHM] Cannot unlink " + name + ": " + std::strerror(errno), MessageLevel::ERROR);
+        }
     }
 
     enum class MessageLevel { NORMAL, WARNING, ERROR };
