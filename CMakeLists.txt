@@ -12,6 +12,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	add_library(rocos_igh_core STATIC
 		src/slave_config.cpp
 		src/ethercat_master.cpp
+		src/cyclic_task.cpp
 	)
 	target_include_directories(rocos_igh_core PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
@@ -42,6 +43,9 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
+	if(NOT ROCOS_IGH_BUILD_MASTER)
+		target_sources(shared_memory_config_test PRIVATE src/cyclic_task.cpp)
+	endif()
 	target_compile_definitions(shared_memory_config_test PRIVATE
 		ROCOS_IGH_TESTING=1
 		ROCOS_IGH_BUILD_MASTER=$<BOOL:${ROCOS_IGH_BUILD_MASTER}>
