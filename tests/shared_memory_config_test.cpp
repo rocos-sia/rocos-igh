@@ -213,13 +213,29 @@ bool testPdRollbackOnPartialFailure() {
 }  // namespace
 
 int main() {
-    CHECK(testEcatBusDefaults());
-    CHECK(testInvalidArguments());
-    CHECK(testClientRequiresExistingOwner());
-    CHECK(testMasterClientExchange());
-    CHECK(testSecondOwnerIsolation());
-    CHECK(testDuplicateOwnerRejected());
-    CHECK(testSemaphoreRollbackOnPartialFailure());
-    CHECK(testPdRollbackOnPartialFailure());
+    if (!testEcatBusDefaults()) {
+        return EXIT_FAILURE;
+    }
+    if (!testInvalidArguments()) {
+        return EXIT_FAILURE;
+    }
+    if (!testClientRequiresExistingOwner()) {
+        return EXIT_FAILURE;
+    }
+    if (!testMasterClientExchange()) {
+        return EXIT_FAILURE;
+    }
+    if (!testSecondOwnerIsolation()) {
+        return EXIT_FAILURE;
+    }
+    if (!testDuplicateOwnerRejected()) {
+        return EXIT_FAILURE;
+    }
+    if (!testSemaphoreRollbackOnPartialFailure()) {
+        return EXIT_FAILURE;
+    }
+    if (!testPdRollbackOnPartialFailure()) {
+        return EXIT_FAILURE;
+    }
     return 0;
 }
