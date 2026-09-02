@@ -435,21 +435,25 @@ public:
     }
 
     void wait() {
-        auto id = std::this_thread::get_id();
-        auto it = std::find(threadId_.begin(), threadId_.end(), id);
-        if (it != threadId_.end()) {
-            if (!waitForSignal(static_cast<int>(std::distance(threadId_.begin(), it)))) {
-                print_message("[SHM] Failed waiting on semaphore.", MessageLevel::ERROR);
+        int slot = -1;
+        {
+            std::lock_guard<std::mutex> lk(thread_id_mutex_);
+            const auto id = std::this_thread::get_id();
+            const auto it = std::find(threadId_.begin(), threadId_.end(), id);
+            if (it != threadId_.end()) {
+                slot = static_cast<int>(std::distance(threadId_.begin(), it));
+            } else {
+                if (threadId_.size() >= EC_SEM_NUM) {
+                    print_message("[SHM] Too many threads.", MessageLevel::ERROR);
+                    return;
+                }
+                threadId_.push_back(id);
+                slot = static_cast<int>(threadId_.size() - 1);
             }
-        } else {
-            if (threadId_.size() >= EC_SEM_NUM) {
-                print_message("[SHM] Too many threads.", MessageLevel::ERROR);
-                return;
-            }
-            threadId_.push_back(id);
-            if (!waitForSignal(static_cast<int>(threadId_.size() - 1))) {
-                print_message("[SHM] Failed waiting on semaphore.", MessageLevel::ERROR);
-            }
+        }
+
+        if (!waitForSignal(slot)) {
+            print_message("[SHM] Failed waiting on semaphore.", MessageLevel::ERROR);
         }
     }
 
@@ -618,6 +622,7 @@ private:
     bool owns_pd_input_{false};
     bool owns_pd_output_{false};
     bool owns_semaphores_{false};
+    std::mutex thread_id_mutex_;
 
     std::vector<std::thread::id> threadId_;
 

@@ -4,9 +4,12 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <atomic>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <thread>
+#include <vector>
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -210,6 +213,72 @@ bool testPdRollbackOnPartialFailure() {
     return true;
 }
 
+bool testConcurrentWaitRegistration() {
+    const int id = uniqueMasterId();
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(owner.createSharedMemory());
+    CHECK(owner.createPdDataMemoryProvider(16, 16));
+
+    rocos::SharedMemoryConfig client(id);
+    CHECK(client.getSharedMemory());
+    CHECK(client.getPdDataMemoryProvider());
+
+    std::atomic<int> ready{0};
+    std::atomic<int> completed{0};
+    std::vector<std::thread> waiters;
+    for (int index = 0; index < 2; ++index) {
+        waiters.emplace_back([&]() {
+            ready.fetch_add(1, std::memory_order_relaxed);
+            client.wait();
+            completed.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+
+    while (ready.load(std::memory_order_relaxed) < 2) {
+        std::this_thread::yield();
+    }
+
+    CHECK(owner.notifyClients());
+    for (auto &waiter : waiters) {
+        waiter.join();
+    }
+    CHECK(completed.load(std::memory_order_relaxed) == 2);
+    return true;
+}
+
+bool testWaitThreadLimitDoesNotDeadlock() {
+    const int id = uniqueMasterId();
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(owner.createSharedMemory());
+    CHECK(owner.createPdDataMemoryProvider(16, 16));
+
+    rocos::SharedMemoryConfig client(id);
+    CHECK(client.getSharedMemory());
+    CHECK(client.getPdDataMemoryProvider());
+
+    std::atomic<int> ready{0};
+    std::atomic<int> completed{0};
+    std::vector<std::thread> waiters;
+    for (int index = 0; index < EC_SEM_NUM + 1; ++index) {
+        waiters.emplace_back([&]() {
+            ready.fetch_add(1, std::memory_order_relaxed);
+            client.wait();
+            completed.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+
+    while (ready.load(std::memory_order_relaxed) < EC_SEM_NUM + 1) {
+        std::this_thread::yield();
+    }
+
+    CHECK(owner.notifyClients());
+    for (auto &waiter : waiters) {
+        waiter.join();
+    }
+    CHECK(completed.load(std::memory_order_relaxed) == EC_SEM_NUM + 1);
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -235,6 +304,12 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testPdRollbackOnPartialFailure()) {
+        return EXIT_FAILURE;
+    }
+    if (!testConcurrentWaitRegistration()) {
+        return EXIT_FAILURE;
+    }
+    if (!testWaitThreadLimitDoesNotDeadlock()) {
         return EXIT_FAILURE;
     }
     return 0;
