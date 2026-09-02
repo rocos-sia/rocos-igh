@@ -412,7 +412,10 @@ public:
             print_message("[INIT] Cannot get shared memory.", MessageLevel::ERROR);
             exit(1);
         }
-        getPdDataMemoryProvider();
+        if (!getPdDataMemoryProvider()) {
+            print_message("[INIT] Cannot get PDO shared memory.", MessageLevel::ERROR);
+            exit(1);
+        }
         print_message("[SHM] Shared memory ready.", MessageLevel::NORMAL);
     }
 

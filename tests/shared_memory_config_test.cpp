@@ -5,6 +5,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <unistd.h>
 
 #define CHECK(condition) do { \
@@ -18,6 +19,32 @@ namespace {
 
 int uniqueMasterId() {
     return 10000 + static_cast<int>(::getpid() % 10000);
+}
+
+std::string sharedMemoryName(const std::string &prefix, int id) {
+    return "/" + prefix + std::to_string(id);
+}
+
+std::string semaphoreName(int id, int index) {
+    return "/" + std::string(EC_SEM_MUTEX) + std::to_string(id) + "_" + std::to_string(index);
+}
+
+bool sharedMemoryExists(const std::string &name) {
+    const int fd = shm_open(name.c_str(), O_RDWR, 0);
+    if (fd < 0) {
+        return false;
+    }
+    close(fd);
+    return true;
+}
+
+bool semaphoreExists(const std::string &name) {
+    sem_t *const sem = sem_open(name.c_str(), 0);
+    if (sem == SEM_FAILED) {
+        return false;
+    }
+    CHECK(sem_close(sem) == 0);
+    return true;
 }
 
 bool testEcatBusDefaults() {
@@ -144,6 +171,45 @@ bool testDuplicateOwnerRejected() {
     return true;
 }
 
+bool testSemaphoreRollbackOnPartialFailure() {
+    const int id = uniqueMasterId();
+    const int blocked_index = EC_SEM_NUM - 1;
+    const std::string blocked_name = semaphoreName(id, blocked_index);
+    sem_t *const blocker = sem_open(blocked_name.c_str(), O_CREAT | O_EXCL, 0660, 0);
+    CHECK(blocker != SEM_FAILED);
+
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(!owner.createSharedMemory());
+    CHECK(!sharedMemoryExists(sharedMemoryName(EC_SHM, id)));
+    for (int index = 0; index < blocked_index; ++index) {
+        CHECK(!semaphoreExists(semaphoreName(id, index)));
+    }
+    CHECK(semaphoreExists(blocked_name));
+
+    CHECK(sem_close(blocker) == 0);
+    CHECK(sem_unlink(blocked_name.c_str()) == 0);
+    return true;
+}
+
+bool testPdRollbackOnPartialFailure() {
+    const int id = uniqueMasterId();
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(owner.createSharedMemory());
+
+    const std::string blocked_output_name = sharedMemoryName("pd_output", id);
+    const int blocker = shm_open(blocked_output_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    CHECK(blocker >= 0);
+    CHECK(ftruncate(blocker, 16) == 0);
+
+    CHECK(!owner.createPdDataMemoryProvider(16, 16));
+    CHECK(!sharedMemoryExists(sharedMemoryName("pd_input", id)));
+    CHECK(sharedMemoryExists(blocked_output_name));
+
+    CHECK(close(blocker) == 0);
+    CHECK(shm_unlink(blocked_output_name.c_str()) == 0);
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -153,5 +219,7 @@ int main() {
     CHECK(testMasterClientExchange());
     CHECK(testSecondOwnerIsolation());
     CHECK(testDuplicateOwnerRejected());
+    CHECK(testSemaphoreRollbackOnPartialFailure());
+    CHECK(testPdRollbackOnPartialFailure());
     return 0;
 }
