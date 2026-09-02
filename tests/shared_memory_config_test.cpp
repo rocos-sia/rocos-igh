@@ -1,5 +1,6 @@
 #include "shared_memory_config.hpp"
 #if ROCOS_IGH_BUILD_MASTER
+#include "ethercat_master.hpp"
 #include "slave_config.hpp"
 #endif
 
@@ -8,6 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <atomic>
+#include <type_traits>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -283,6 +285,53 @@ bool testWaitThreadLimitDoesNotDeadlock() {
 }
 
 #if ROCOS_IGH_BUILD_MASTER
+static_assert(!std::is_copy_constructible<rocos::EthercatMaster>::value,
+              "EthercatMaster must own one master exclusively");
+static_assert(!std::is_move_constructible<rocos::EthercatMaster>::value,
+              "domain pointers must not outlive their owner");
+
+bool testPublishConfigMetadata() {
+    static ec_sync_info_t sync_table[1] = {};
+    static rocos::PdoEntrySpec entries[2] = {
+        {"status", rocos::PdoDirection::Input, 0x6000, 1, 16, 12, 0},
+        {"command", rocos::PdoDirection::Output, 0x7000, 2, 32, 20, 0},
+    };
+    static rocos::SlaveSpec slave = {
+        0, 0, 0x00000002, 0x12345678, "synthetic", sync_table, entries, 2
+    };
+    rocos::StaticSlaveConfig config{&slave, 1};
+
+    rocos::EcatBus bus{};
+    bus.slave_num = 99;
+    std::strncpy(bus.slaves[0].name, "stale", MAX_SLAVE_NAME_LEN - 1);
+
+    std::string error;
+    CHECK(rocos::publishConfig(bus, config, error));
+    CHECK(error.empty());
+    CHECK(bus.slave_num == 1);
+
+    const rocos::Slave &published = bus.slaves[0];
+    CHECK(published.id == 0);
+    CHECK(std::string(published.name) == "synthetic");
+    CHECK(published.input_var_num == 1);
+    CHECK(published.output_var_num == 1);
+
+    const rocos::PdVar &in = published.input_vars[0];
+    CHECK(std::string(in.name) == "status");
+    CHECK(in.offset == 12);
+    CHECK(in.size == 2);
+    CHECK(in.index == 0x6000);
+    CHECK(in.sub_index == 1);
+
+    const rocos::PdVar &out = published.output_vars[0];
+    CHECK(std::string(out.name) == "command");
+    CHECK(out.offset == 20);
+    CHECK(out.size == 4);
+    CHECK(out.index == 0x7000);
+    CHECK(out.sub_index == 2);
+    return true;
+}
+
 bool testSlaveConfigValidation() {
     std::string error;
     CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
@@ -336,6 +385,9 @@ int main() {
         return EXIT_FAILURE;
     }
 #if ROCOS_IGH_BUILD_MASTER
+    if (!testPublishConfigMetadata()) {
+        return EXIT_FAILURE;
+    }
     if (!testSlaveConfigValidation()) {
         return EXIT_FAILURE;
     }
