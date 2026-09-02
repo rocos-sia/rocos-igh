@@ -7,11 +7,15 @@
 #if ROCOS_IGH_BUILD_MASTER
 #include <ecrt.h>
 #else
+#ifndef __ECRT_H__
 struct ec_sync_info;
 using ec_sync_info_t = struct ec_sync_info;
 #endif
+#endif
 
 namespace rocos {
+
+struct EcatBus;
 
 enum class PdoDirection { Input, Output };
 
@@ -43,5 +47,6 @@ struct StaticSlaveConfig {
 
 StaticSlaveConfig defaultSlaveConfig() noexcept;
 bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) noexcept;
+bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &error) noexcept;
 
 }  // namespace rocos

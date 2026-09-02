@@ -11,6 +11,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
 		src/slave_config.cpp
+		src/ethercat_master.cpp
 	)
 	target_include_directories(rocos_igh_core PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
