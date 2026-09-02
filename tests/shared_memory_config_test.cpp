@@ -1,4 +1,7 @@
 #include "shared_memory_config.hpp"
+#if ROCOS_IGH_BUILD_MASTER
+#include "slave_config.hpp"
+#endif
 
 #include <cerrno>
 #include <cstdint>
@@ -279,6 +282,26 @@ bool testWaitThreadLimitDoesNotDeadlock() {
     return true;
 }
 
+#if ROCOS_IGH_BUILD_MASTER
+bool testSlaveConfigValidation() {
+    std::string error;
+    CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
+
+    static const ec_sync_info_t sync_table[1] = {};
+    rocos::PdoEntrySpec invalid_entry{
+        "status", rocos::PdoDirection::Input, 0x6000, 1, 7, 0, 0
+    };
+    rocos::SlaveSpec invalid_slave{
+        0, 0, 0x00000002, 0x12345678, "invalid", sync_table,
+        &invalid_entry, 1
+    };
+    const rocos::StaticSlaveConfig invalid_config{&invalid_slave, 1};
+    CHECK(!rocos::validateSlaveConfig(invalid_config, error));
+    CHECK(error.find("byte-aligned") != std::string::npos);
+    return true;
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -312,5 +335,10 @@ int main() {
     if (!testWaitThreadLimitDoesNotDeadlock()) {
         return EXIT_FAILURE;
     }
+#if ROCOS_IGH_BUILD_MASTER
+    if (!testSlaveConfigValidation()) {
+        return EXIT_FAILURE;
+    }
+#endif
     return 0;
 }
