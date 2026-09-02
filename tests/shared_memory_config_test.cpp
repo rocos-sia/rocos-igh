@@ -1,4 +1,5 @@
 #include "shared_memory_config.hpp"
+#include "cyclic_task.hpp"
 #if ROCOS_IGH_BUILD_MASTER
 #include "ethercat_master.hpp"
 #include "slave_config.hpp"
@@ -309,6 +310,36 @@ bool testWaitThreadLimitDoesNotDeadlock() {
     return true;
 }
 
+bool testProcessDataCopy() {
+    std::uint8_t domain_input[4]{1, 2, 3, 4};
+    std::uint8_t shared_input[4]{};
+    std::uint8_t shared_output[4]{5, 6, 7, 8};
+    std::uint8_t domain_output[4]{};
+
+    rocos::copyProcessData(domain_input,
+                           sizeof(domain_input),
+                           shared_input,
+                           shared_output,
+                           domain_output,
+                           sizeof(domain_output));
+
+    CHECK(std::memcmp(domain_input, shared_input, 4) == 0);
+    CHECK(std::memcmp(shared_output, domain_output, 4) == 0);
+    return true;
+}
+
+bool testDeadlineAdvanceSkipsCatchUp() {
+    const timespec previous{10, 0};
+    const timespec now{10, 3'500'000};
+    std::uint64_t missed = 0;
+
+    const timespec next = rocos::advanceDeadline(previous, 1000, now, missed);
+    CHECK(next.tv_sec == 10);
+    CHECK(next.tv_nsec == 4'000'000);
+    CHECK(missed == 3);
+    return true;
+}
+
 #if ROCOS_IGH_BUILD_MASTER
 static_assert(!std::is_copy_constructible<rocos::EthercatMaster>::value,
               "EthercatMaster must own one master exclusively");
@@ -529,6 +560,12 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testWaitThreadLimitDoesNotDeadlock()) {
+        return EXIT_FAILURE;
+    }
+    if (!testProcessDataCopy()) {
+        return EXIT_FAILURE;
+    }
+    if (!testDeadlineAdvanceSkipsCatchUp()) {
         return EXIT_FAILURE;
     }
 #if ROCOS_IGH_BUILD_MASTER
