@@ -13,6 +13,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 		src/slave_config.cpp
 		src/ethercat_master.cpp
 		src/cyclic_task.cpp
+		src/runtime_options.cpp
 	)
 	target_include_directories(rocos_igh_core PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
@@ -27,6 +28,9 @@ if(ROCOS_IGH_BUILD_MASTER)
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		target_link_libraries(rocos_igh_core PUBLIC rt)
 	endif()
+
+	add_executable(rocos_igh_master src/main.cpp)
+	target_link_libraries(rocos_igh_master PRIVATE rocos_igh_core)
 else()
 	add_library(rocos_igh_core INTERFACE)
 	target_include_directories(rocos_igh_core INTERFACE
@@ -44,7 +48,7 @@ include(CTest)
 if(BUILD_TESTING)
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
 	if(NOT ROCOS_IGH_BUILD_MASTER)
-		target_sources(shared_memory_config_test PRIVATE src/cyclic_task.cpp)
+		target_sources(shared_memory_config_test PRIVATE src/cyclic_task.cpp src/runtime_options.cpp)
 	endif()
 	target_compile_definitions(shared_memory_config_test PRIVATE
 		ROCOS_IGH_TESTING=1

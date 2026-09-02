@@ -1,5 +1,6 @@
 #include "shared_memory_config.hpp"
 #include "cyclic_task.hpp"
+#include "runtime_options.hpp"
 #if ROCOS_IGH_BUILD_MASTER
 #include "ethercat_master.hpp"
 #include "slave_config.hpp"
@@ -340,6 +341,39 @@ bool testDeadlineAdvanceSkipsCatchUp() {
     return true;
 }
 
+bool testRuntimeOptions() {
+    char program[] = "rocos_igh_master";
+    char master_flag[] = "--master-id";
+    char master_value[] = "1";
+    char period_flag[] = "--period-us";
+    char period_value[] = "1000";
+    char *valid[]{program, master_flag, master_value, period_flag, period_value};
+
+    rocos::RuntimeOptions options{};
+    std::string error;
+    CHECK(rocos::parseRuntimeOptions(5, valid, options, error));
+    CHECK(error.empty());
+    CHECK(options.master_id == 1U);
+    CHECK(options.period_us == 1000U);
+
+    char short_period[] = "999";
+    char *invalid_period[]{program, period_flag, short_period};
+    CHECK(!rocos::parseRuntimeOptions(3, invalid_period, options, error));
+    CHECK(error.find("period-us") != std::string::npos);
+
+    char negative_master[] = "-1";
+    char *invalid_master[]{program, master_flag, negative_master};
+    CHECK(!rocos::parseRuntimeOptions(3, invalid_master, options, error));
+
+    char *missing_value[]{program, period_flag};
+    CHECK(!rocos::parseRuntimeOptions(2, missing_value, options, error));
+
+    char bad_flag[] = "--unknown";
+    char *unknown[]{program, bad_flag};
+    CHECK(!rocos::parseRuntimeOptions(2, unknown, options, error));
+    return true;
+}
+
 #if ROCOS_IGH_BUILD_MASTER
 bool testUpdateSharedBusResetKeepsCurrentCycleDuration() {
     rocos::CycleStatistics stats{};
@@ -623,6 +657,9 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testDeadlineAdvanceSkipsCatchUp()) {
+        return EXIT_FAILURE;
+    }
+    if (!testRuntimeOptions()) {
         return EXIT_FAILURE;
     }
 #if ROCOS_IGH_BUILD_MASTER
