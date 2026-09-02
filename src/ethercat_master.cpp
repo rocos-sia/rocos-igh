@@ -13,13 +13,16 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
 
     if (initialized_) {
         error = "master already initialized";
+        reset();
         return false;
     }
     if (config.slave_count == 0) {
         error = "no slave configuration compiled";
+        reset();
         return false;
     }
     if (!validateSlaveConfig(config, error)) {
+        reset();
         return false;
     }
 
@@ -116,12 +119,20 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
 }
 
 void EthercatMaster::receiveAndProcess() noexcept {
+    if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
+        return;
+    }
+
     (void)ecrt_master_receive(master_);
     (void)ecrt_domain_process(input_domain_);
     (void)ecrt_domain_process(output_domain_);
 }
 
 void EthercatMaster::queueAndSend() noexcept {
+    if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
+        return;
+    }
+
     (void)ecrt_domain_queue(input_domain_);
     (void)ecrt_domain_queue(output_domain_);
     (void)ecrt_master_send(master_);

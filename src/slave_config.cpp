@@ -128,6 +128,14 @@ bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &e
                     error = "entry size exceeds PdVar range";
                     return false;
                 }
+                if (entry.offset > EC_SHM_MAX_SIZE) {
+                    error = "entry offset exceeds EC_SHM_MAX_SIZE";
+                    return false;
+                }
+                if (byte_size > (EC_SHM_MAX_SIZE - entry.offset)) {
+                    error = "entry offset + size exceeds EC_SHM_MAX_SIZE";
+                    return false;
+                }
 
                 PdVar *target_var = nullptr;
                 if (entry.direction == PdoDirection::Input) {

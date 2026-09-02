@@ -332,6 +332,61 @@ bool testPublishConfigMetadata() {
     return true;
 }
 
+bool testPublishConfigMetadataBounds() {
+    static ec_sync_info_t sync_table[1] = {};
+    static rocos::PdoEntrySpec valid_entries[1] = {
+        {"near_limit", rocos::PdoDirection::Input, 0x6001, 1, 16,
+         static_cast<unsigned int>(EC_SHM_MAX_SIZE - 2), 0},
+    };
+    static rocos::SlaveSpec valid_slave = {
+        0, 0, 0x00000002, 0x12345678, "valid", sync_table, valid_entries, 1
+    };
+    rocos::StaticSlaveConfig valid_config{&valid_slave, 1};
+
+    rocos::EcatBus valid_bus{};
+    std::string error;
+    CHECK(rocos::publishConfig(valid_bus, valid_config, error));
+    CHECK(error.empty());
+    CHECK(valid_bus.slaves[0].input_vars[0].offset == EC_SHM_MAX_SIZE - 2);
+    CHECK(valid_bus.slaves[0].input_vars[0].size == 2);
+
+    static rocos::PdoEntrySpec overflow_entries[1] = {
+        {"overflow", rocos::PdoDirection::Output, 0x7001, 1, 32,
+         static_cast<unsigned int>(EC_SHM_MAX_SIZE - 2), 0},
+    };
+    static rocos::SlaveSpec overflow_slave = {
+        0, 0, 0x00000002, 0x12345678, "overflow", sync_table, overflow_entries, 1
+    };
+    rocos::StaticSlaveConfig overflow_config{&overflow_slave, 1};
+
+    rocos::EcatBus overflow_bus{};
+    CHECK(!rocos::publishConfig(overflow_bus, overflow_config, error));
+    CHECK(error.find("offset + size exceeds EC_SHM_MAX_SIZE") != std::string::npos);
+    return true;
+}
+
+bool testMasterCyclicCallsBeforeInitialization() {
+    rocos::EthercatMaster master;
+    CHECK(!master.initialized());
+    CHECK(master.inputData() == nullptr);
+    CHECK(master.outputData() == nullptr);
+    CHECK(master.inputSize() == 0);
+    CHECK(master.outputSize() == 0);
+
+    master.receiveAndProcess();
+    master.queueAndSend();
+
+    const rocos::BusState state = master.readState();
+    CHECK(state.responding_slaves == 0U);
+    CHECK(state.al_states == 0U);
+    CHECK(!state.link_up);
+    CHECK(state.input_working_counter == 0U);
+    CHECK(state.output_working_counter == 0U);
+    CHECK(state.input_wc_state == EC_WC_ZERO);
+    CHECK(state.output_wc_state == EC_WC_ZERO);
+    return true;
+}
+
 bool testSlaveConfigValidation() {
     std::string error;
     CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
@@ -386,6 +441,12 @@ int main() {
     }
 #if ROCOS_IGH_BUILD_MASTER
     if (!testPublishConfigMetadata()) {
+        return EXIT_FAILURE;
+    }
+    if (!testPublishConfigMetadataBounds()) {
+        return EXIT_FAILURE;
+    }
+    if (!testMasterCyclicCallsBeforeInitialization()) {
         return EXIT_FAILURE;
     }
     if (!testSlaveConfigValidation()) {
