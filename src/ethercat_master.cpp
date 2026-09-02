@@ -13,7 +13,6 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
 
     if (initialized_) {
         error = "master already initialized";
-        reset();
         return false;
     }
     if (config.slave_count == 0) {

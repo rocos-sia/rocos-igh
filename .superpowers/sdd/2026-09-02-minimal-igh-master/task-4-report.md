@@ -167,3 +167,69 @@ Test project /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-maste
 
 Total Test time (real) =   0.01 sec
 ```
+
+## Fix Round 2 (Human override: preserve live master on repeated initialize)
+
+### Important finding addressed
+
+- Updated `EthercatMaster::initialize()` so `initialized_` precondition failure returns `false` with `"master already initialized"` **without** calling `reset()`.
+- All fresh/partial initialization failure paths (`empty config`, config validation failure, request/create/register/activate/data-size failures) continue to call `reset()`.
+
+### Added hardware-free regression coverage
+
+- Added a test-only friend peer (`ROCOS_IGH_TESTING`) to seed private state in `EthercatMaster` without invoking IgH/hardware.
+- Added `testInitializeRejectsAlreadyInitializedWithoutReset()`:
+  - seeds an initialized object with sentinel input/output pointers and sizes,
+  - calls `initialize(...)`,
+  - asserts failure + exact error string,
+  - asserts seeded state is preserved (no reset side effects).
+- Added `testInitializeFreshFailureResetsState()`:
+  - seeds a non-initialized object with sentinel state,
+  - calls `initialize(...)` with empty config,
+  - asserts failure + exact error string,
+  - asserts state is cleared by reset.
+
+### Hardware-free test limitations
+
+- Without hardware or link-time symbol interception/mocking of `ecrt_release_master`, tests cannot directly prove that no release call occurred on the already-initialized branch.
+- The strongest practical hardware-free contract proof here is observable state preservation (no reset side effects) plus preserved reset behavior on fresh/partial failures.
+
+### Verification evidence (exact)
+
+1. `cmake --build build-master && ctest --test-dir build-master --output-on-failure`
+
+```text
+[ 60%] Built target rocos_igh_core
+Consolidate compiler generated dependencies of target shared_memory_config_test
+[ 80%] Building CXX object CMakeFiles/shared_memory_config_test.dir/tests/shared_memory_config_test.cpp.o
+[100%] Linking CXX executable shared_memory_config_test
+[100%] Built target shared_memory_config_test
+Internal ctest changing into directory: /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-master/build-master
+Test project /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-master/build-master
+    Start 1: shared_memory_config
+1/1 Test #1: shared_memory_config .............   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.01 sec
+```
+
+2. `cmake -S . -B build-nomaster -DROCOS_IGH_BUILD_MASTER=OFF -DROCOS_IGH_BUILD_HARDWARE_TESTS=OFF && cmake --build build-nomaster && ctest --test-dir build-nomaster --output-on-failure`
+
+```text
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-master/build-nomaster
+Consolidate compiler generated dependencies of target shared_memory_config_test
+[ 50%] Building CXX object CMakeFiles/shared_memory_config_test.dir/tests/shared_memory_config_test.cpp.o
+[100%] Linking CXX executable shared_memory_config_test
+[100%] Built target shared_memory_config_test
+Internal ctest changing into directory: /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-master/build-nomaster
+Test project /home/think/Documents/GitHub/rocos-igh/.worktrees/minimal-igh-master/build-nomaster
+    Start 1: shared_memory_config
+1/1 Test #1: shared_memory_config .............   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.01 sec
+```

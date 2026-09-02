@@ -43,6 +43,7 @@ include(CTest)
 if(BUILD_TESTING)
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
 	target_compile_definitions(shared_memory_config_test PRIVATE
+		ROCOS_IGH_TESTING=1
 		ROCOS_IGH_BUILD_MASTER=$<BOOL:${ROCOS_IGH_BUILD_MASTER}>
 	)
 	target_link_libraries(shared_memory_config_test PRIVATE rocos_igh_core)

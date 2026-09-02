@@ -16,6 +16,31 @@
 #include <thread>
 #include <vector>
 
+#if ROCOS_IGH_BUILD_MASTER
+namespace rocos {
+struct EthercatMasterTestPeer {
+    static void seedState(EthercatMaster &master,
+                          bool initialized,
+                          ec_master_t *master_ptr,
+                          ec_domain_t *input_domain,
+                          ec_domain_t *output_domain,
+                          std::uint8_t *input_data,
+                          std::uint8_t *output_data,
+                          std::size_t input_size,
+                          std::size_t output_size) {
+        master.initialized_ = initialized;
+        master.master_ = master_ptr;
+        master.input_domain_ = input_domain;
+        master.output_domain_ = output_domain;
+        master.input_data_ = input_data;
+        master.output_data_ = output_data;
+        master.input_size_ = input_size;
+        master.output_size_ = output_size;
+    }
+};
+}  // namespace rocos
+#endif
+
 #define CHECK(condition) do { \
     if (!(condition)) { \
         std::cerr << __FILE__ << ':' << __LINE__ << ": " #condition "\n"; \
@@ -387,6 +412,73 @@ bool testMasterCyclicCallsBeforeInitialization() {
     return true;
 }
 
+bool testInitializeRejectsAlreadyInitializedWithoutReset() {
+    rocos::EthercatMaster master;
+    auto *const seeded_input = reinterpret_cast<std::uint8_t *>(0x1000);
+    auto *const seeded_output = reinterpret_cast<std::uint8_t *>(0x2000);
+    auto *const seeded_input_domain = reinterpret_cast<ec_domain_t *>(0x3000);
+    auto *const seeded_output_domain = reinterpret_cast<ec_domain_t *>(0x4000);
+
+    rocos::EthercatMasterTestPeer::seedState(master,
+                                             true,
+                                             nullptr,
+                                             seeded_input_domain,
+                                             seeded_output_domain,
+                                             seeded_input,
+                                             seeded_output,
+                                             64,
+                                             128);
+
+    std::string error;
+    CHECK(!master.initialize(0, rocos::defaultSlaveConfig(), error));
+    CHECK(error == "master already initialized");
+    CHECK(master.initialized());
+    CHECK(master.inputData() == seeded_input);
+    CHECK(master.outputData() == seeded_output);
+    CHECK(master.inputSize() == 64U);
+    CHECK(master.outputSize() == 128U);
+
+    rocos::EthercatMasterTestPeer::seedState(master,
+                                             false,
+                                             nullptr,
+                                             nullptr,
+                                             nullptr,
+                                             nullptr,
+                                             nullptr,
+                                             0,
+                                             0);
+    return true;
+}
+
+bool testInitializeFreshFailureResetsState() {
+    rocos::EthercatMaster master;
+    auto *const seeded_input = reinterpret_cast<std::uint8_t *>(0x5000);
+    auto *const seeded_output = reinterpret_cast<std::uint8_t *>(0x6000);
+    auto *const seeded_input_domain = reinterpret_cast<ec_domain_t *>(0x7000);
+    auto *const seeded_output_domain = reinterpret_cast<ec_domain_t *>(0x8000);
+
+    rocos::EthercatMasterTestPeer::seedState(master,
+                                             false,
+                                             nullptr,
+                                             seeded_input_domain,
+                                             seeded_output_domain,
+                                             seeded_input,
+                                             seeded_output,
+                                             7,
+                                             9);
+
+    std::string error;
+    const rocos::StaticSlaveConfig empty_config{};
+    CHECK(!master.initialize(0, empty_config, error));
+    CHECK(error == "no slave configuration compiled");
+    CHECK(!master.initialized());
+    CHECK(master.inputData() == nullptr);
+    CHECK(master.outputData() == nullptr);
+    CHECK(master.inputSize() == 0U);
+    CHECK(master.outputSize() == 0U);
+    return true;
+}
+
 bool testSlaveConfigValidation() {
     std::string error;
     CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
@@ -447,6 +539,12 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testMasterCyclicCallsBeforeInitialization()) {
+        return EXIT_FAILURE;
+    }
+    if (!testInitializeRejectsAlreadyInitializedWithoutReset()) {
+        return EXIT_FAILURE;
+    }
+    if (!testInitializeFreshFailureResetsState()) {
         return EXIT_FAILURE;
     }
     if (!testSlaveConfigValidation()) {
