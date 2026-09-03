@@ -16,19 +16,14 @@ from PDO mapping.
 SM2 maps master outputs through RxPDO `0x1600`, with the watchdog enabled:
 
 1. `0x607A:00`, Target Position, 32 bits
-2. `0x60FF:00`, Target Velocity, 32 bits
-3. `0x6071:00`, Target Torque, 16 bits
-4. `0x6040:00`, Control Word, 16 bits
-5. `0x6060:00`, Modes of Operation, 8 bits
+2. `0x60FE:00`, Digital Outputs, 32 bits
+3. `0x6040:00`, Control Word, 16 bits
 
 SM3 maps master inputs through TxPDO `0x1A00`:
 
-1. `0x6041:00`, Status Word, 16 bits
-2. `0x6064:00`, Position Actual Value, 32 bits
-3. `0x606C:00`, Velocity Actual Value, 32 bits
-4. `0x6077:00`, Torque Actual Value, 16 bits
-5. `0x20A0:00`, Auxiliary Position Actual Value, 32 bits
-6. `0x2205:02`, Analog Input, 16 bits
+1. `0x6064:00`, Position Actual Value, 32 bits
+2. `0x60FD:00`, Digital Inputs, 32 bits
+3. `0x6041:00`, Status Word, 16 bits
 
 ## Identity Resolution
 

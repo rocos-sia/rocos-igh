@@ -523,16 +523,11 @@ bool testDefaultSlavePdoMapping() {
 
     static constexpr ExpectedEntry expected[] = {
         {"Target Position", rocos::PdoDirection::Output, 0x607A, 0, 32},
-        {"Target Velocity", rocos::PdoDirection::Output, 0x60FF, 0, 32},
-        {"Target Torque", rocos::PdoDirection::Output, 0x6071, 0, 16},
+        {"Digital Outputs", rocos::PdoDirection::Output, 0x60FE, 0, 32},
         {"Control Word", rocos::PdoDirection::Output, 0x6040, 0, 16},
-        {"Modes of Operation", rocos::PdoDirection::Output, 0x6060, 0, 8},
-        {"Status Word", rocos::PdoDirection::Input, 0x6041, 0, 16},
         {"Position Actual Value", rocos::PdoDirection::Input, 0x6064, 0, 32},
-        {"Velocity Actual Value", rocos::PdoDirection::Input, 0x606C, 0, 32},
-        {"Torque Actual Value", rocos::PdoDirection::Input, 0x6077, 0, 16},
-        {"Auxiliary Position Actual Value", rocos::PdoDirection::Input, 0x20A0, 0, 32},
-        {"Analog Input", rocos::PdoDirection::Input, 0x2205, 2, 16},
+        {"Digital Inputs", rocos::PdoDirection::Input, 0x60FD, 0, 32},
+        {"Status Word", rocos::PdoDirection::Input, 0x6041, 0, 16},
     };
 
     const rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig();
@@ -551,13 +546,13 @@ bool testDefaultSlavePdoMapping() {
     CHECK(slave.syncs[0].dir == EC_DIR_OUTPUT);
     CHECK(slave.syncs[0].n_pdos == 1U);
     CHECK(slave.syncs[0].pdos[0].index == 0x1600U);
-    CHECK(slave.syncs[0].pdos[0].n_entries == 5U);
+    CHECK(slave.syncs[0].pdos[0].n_entries == 3U);
     CHECK(slave.syncs[0].watchdog_mode == EC_WD_ENABLE);
     CHECK(slave.syncs[1].index == 3U);
     CHECK(slave.syncs[1].dir == EC_DIR_INPUT);
     CHECK(slave.syncs[1].n_pdos == 1U);
     CHECK(slave.syncs[1].pdos[0].index == 0x1A00U);
-    CHECK(slave.syncs[1].pdos[0].n_entries == 6U);
+    CHECK(slave.syncs[1].pdos[0].n_entries == 3U);
     CHECK(slave.syncs[1].watchdog_mode == EC_WD_DISABLE);
     CHECK(slave.syncs[2].index == 0xffU);
 

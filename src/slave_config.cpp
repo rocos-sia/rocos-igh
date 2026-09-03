@@ -12,27 +12,22 @@ namespace {
 
 ec_pdo_entry_info_t drive_rx_entries[] = {
     {0x607A, 0x00, 32},
-    {0x60FF, 0x00, 32},
-    {0x6071, 0x00, 16},
+    {0x60FE, 0x00, 32},
     {0x6040, 0x00, 16},
-    {0x6060, 0x00, 8},
 };
 
 ec_pdo_entry_info_t drive_tx_entries[] = {
-    {0x6041, 0x00, 16},
     {0x6064, 0x00, 32},
-    {0x606C, 0x00, 32},
-    {0x6077, 0x00, 16},
-    {0x20A0, 0x00, 32},
-    {0x2205, 0x02, 16},
+    {0x60FD, 0x00, 32},
+    {0x6041, 0x00, 16},
 };
 
 ec_pdo_info_t drive_rx_pdos[] = {
-    {0x1600, 5, drive_rx_entries},
+    {0x1600, 3, drive_rx_entries},
 };
 
 ec_pdo_info_t drive_tx_pdos[] = {
-    {0x1A00, 6, drive_tx_entries},
+    {0x1A00, 3, drive_tx_entries},
 };
 
 ec_sync_info_t drive_syncs[] = {
@@ -43,16 +38,11 @@ ec_sync_info_t drive_syncs[] = {
 
 PdoEntrySpec drive_entries[] = {
     {"Target Position", PdoDirection::Output, 0x607A, 0x00, 32, 0, 0},
-    {"Target Velocity", PdoDirection::Output, 0x60FF, 0x00, 32, 0, 0},
-    {"Target Torque", PdoDirection::Output, 0x6071, 0x00, 16, 0, 0},
+    {"Digital Outputs", PdoDirection::Output, 0x60FE, 0x00, 32, 0, 0},
     {"Control Word", PdoDirection::Output, 0x6040, 0x00, 16, 0, 0},
-    {"Modes of Operation", PdoDirection::Output, 0x6060, 0x00, 8, 0, 0},
-    {"Status Word", PdoDirection::Input, 0x6041, 0x00, 16, 0, 0},
     {"Position Actual Value", PdoDirection::Input, 0x6064, 0x00, 32, 0, 0},
-    {"Velocity Actual Value", PdoDirection::Input, 0x606C, 0x00, 32, 0, 0},
-    {"Torque Actual Value", PdoDirection::Input, 0x6077, 0x00, 16, 0, 0},
-    {"Auxiliary Position Actual Value", PdoDirection::Input, 0x20A0, 0x00, 32, 0, 0},
-    {"Analog Input", PdoDirection::Input, 0x2205, 0x02, 16, 0, 0},
+    {"Digital Inputs", PdoDirection::Input, 0x60FD, 0x00, 32, 0, 0},
+    {"Status Word", PdoDirection::Input, 0x6041, 0x00, 16, 0, 0},
 };
 
 SlaveSpec drive_slaves[] = {
