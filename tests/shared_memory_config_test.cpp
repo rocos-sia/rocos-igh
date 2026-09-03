@@ -512,6 +512,84 @@ bool testPublishConfigMetadataBounds() {
     return true;
 }
 
+bool testDefaultSlavePdoMapping() {
+    struct ExpectedEntry {
+        const char *name;
+        rocos::PdoDirection direction;
+        std::uint16_t index;
+        std::uint8_t sub_index;
+        std::uint8_t bit_length;
+    };
+
+    static constexpr ExpectedEntry expected[] = {
+        {"Target Position", rocos::PdoDirection::Output, 0x607A, 0, 32},
+        {"Target Velocity", rocos::PdoDirection::Output, 0x60FF, 0, 32},
+        {"Target Torque", rocos::PdoDirection::Output, 0x6071, 0, 16},
+        {"Control Word", rocos::PdoDirection::Output, 0x6040, 0, 16},
+        {"Modes of Operation", rocos::PdoDirection::Output, 0x6060, 0, 8},
+        {"Status Word", rocos::PdoDirection::Input, 0x6041, 0, 16},
+        {"Position Actual Value", rocos::PdoDirection::Input, 0x6064, 0, 32},
+        {"Velocity Actual Value", rocos::PdoDirection::Input, 0x606C, 0, 32},
+        {"Torque Actual Value", rocos::PdoDirection::Input, 0x6077, 0, 16},
+        {"Auxiliary Position Actual Value", rocos::PdoDirection::Input, 0x20A0, 0, 32},
+        {"Analog Input", rocos::PdoDirection::Input, 0x2205, 2, 16},
+    };
+
+    const rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig();
+    CHECK(config.slave_count == 1U);
+    CHECK(config.slaves != nullptr);
+
+    const rocos::SlaveSpec &slave = config.slaves[0];
+    CHECK(slave.alias == 0U);
+    CHECK(slave.position == 0U);
+    CHECK(slave.vendor_id == 0U);
+    CHECK(slave.product_code == 0U);
+    CHECK(slave.syncs != nullptr);
+    CHECK(slave.entry_count == (sizeof(expected) / sizeof(expected[0])));
+
+    CHECK(slave.syncs[0].index == 2U);
+    CHECK(slave.syncs[0].dir == EC_DIR_OUTPUT);
+    CHECK(slave.syncs[0].n_pdos == 1U);
+    CHECK(slave.syncs[0].pdos[0].index == 0x1600U);
+    CHECK(slave.syncs[0].pdos[0].n_entries == 5U);
+    CHECK(slave.syncs[0].watchdog_mode == EC_WD_ENABLE);
+    CHECK(slave.syncs[1].index == 3U);
+    CHECK(slave.syncs[1].dir == EC_DIR_INPUT);
+    CHECK(slave.syncs[1].n_pdos == 1U);
+    CHECK(slave.syncs[1].pdos[0].index == 0x1A00U);
+    CHECK(slave.syncs[1].pdos[0].n_entries == 6U);
+    CHECK(slave.syncs[1].watchdog_mode == EC_WD_DISABLE);
+    CHECK(slave.syncs[2].index == 0xffU);
+
+    for (std::size_t index = 0; index < slave.entry_count; ++index) {
+        CHECK(std::string(slave.entries[index].name) == expected[index].name);
+        CHECK(slave.entries[index].direction == expected[index].direction);
+        CHECK(slave.entries[index].index == expected[index].index);
+        CHECK(slave.entries[index].sub_index == expected[index].sub_index);
+        CHECK(slave.entries[index].bit_length == expected[index].bit_length);
+    }
+    return true;
+}
+
+bool testApplyDiscoveredIdentity() {
+    static ec_sync_info_t sync_table[1] = {};
+    rocos::SlaveSpec slave{
+        0, 0, 0, 0, "discovered", sync_table, nullptr, 0
+    };
+    std::string error;
+
+    CHECK(!rocos::applyDiscoveredIdentity(slave, 0, 0x12345678, error));
+    CHECK(error.find("invalid") != std::string::npos);
+    CHECK(slave.vendor_id == 0U);
+    CHECK(slave.product_code == 0U);
+
+    CHECK(rocos::applyDiscoveredIdentity(slave, 0x00000002, 0x12345678, error));
+    CHECK(error.empty());
+    CHECK(slave.vendor_id == 0x00000002U);
+    CHECK(slave.product_code == 0x12345678U);
+    return true;
+}
+
 bool testMasterCyclicCallsBeforeInitialization() {
     rocos::EthercatMaster master;
     CHECK(!master.initialized());
@@ -606,6 +684,31 @@ bool testSlaveConfigValidation() {
     CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
 
     static const ec_sync_info_t sync_table[1] = {};
+    rocos::SlaveSpec half_wildcard_slave{
+        0, 0, 0, 0x12345678, "half-wildcard", sync_table, nullptr, 0
+    };
+    const rocos::StaticSlaveConfig half_wildcard_config{&half_wildcard_slave, 1};
+    CHECK(!rocos::validateSlaveConfig(half_wildcard_config, error));
+    CHECK(error.find("both zero or both non-zero") != std::string::npos);
+
+    rocos::SlaveSpec reverse_half_wildcard_slave{
+        0, 0, 0x00000002, 0, "reverse-half-wildcard", sync_table, nullptr, 0
+    };
+    const rocos::StaticSlaveConfig reverse_half_wildcard_config{
+        &reverse_half_wildcard_slave, 1
+    };
+    CHECK(!rocos::validateSlaveConfig(reverse_half_wildcard_config, error));
+    CHECK(error.find("both zero or both non-zero") != std::string::npos);
+    CHECK(reverse_half_wildcard_slave.vendor_id == 0x00000002U);
+    CHECK(reverse_half_wildcard_slave.product_code == 0U);
+
+    rocos::SlaveSpec aliased_discovery_slave{
+        1, 0, 0, 0, "aliased-discovery", sync_table, nullptr, 0
+    };
+    const rocos::StaticSlaveConfig aliased_discovery_config{&aliased_discovery_slave, 1};
+    CHECK(!rocos::validateSlaveConfig(aliased_discovery_config, error));
+    CHECK(error.find("requires alias 0") != std::string::npos);
+
     rocos::PdoEntrySpec invalid_entry{
         "status", rocos::PdoDirection::Input, 0x6000, 1, 7, 0, 0
     };
@@ -673,6 +776,12 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testPublishConfigMetadataBounds()) {
+        return EXIT_FAILURE;
+    }
+    if (!testDefaultSlavePdoMapping()) {
+        return EXIT_FAILURE;
+    }
+    if (!testApplyDiscoveredIdentity()) {
         return EXIT_FAILURE;
     }
     if (!testMasterCyclicCallsBeforeInitialization()) {

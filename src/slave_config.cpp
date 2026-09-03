@@ -8,10 +8,77 @@
 
 namespace rocos {
 
-// Returns the (currently empty) default slave table; a real deployment adds a
-// device-specific StaticSlaveConfig here before the master can start.
+namespace {
+
+ec_pdo_entry_info_t drive_rx_entries[] = {
+    {0x607A, 0x00, 32},
+    {0x60FF, 0x00, 32},
+    {0x6071, 0x00, 16},
+    {0x6040, 0x00, 16},
+    {0x6060, 0x00, 8},
+};
+
+ec_pdo_entry_info_t drive_tx_entries[] = {
+    {0x6041, 0x00, 16},
+    {0x6064, 0x00, 32},
+    {0x606C, 0x00, 32},
+    {0x6077, 0x00, 16},
+    {0x20A0, 0x00, 32},
+    {0x2205, 0x02, 16},
+};
+
+ec_pdo_info_t drive_rx_pdos[] = {
+    {0x1600, 5, drive_rx_entries},
+};
+
+ec_pdo_info_t drive_tx_pdos[] = {
+    {0x1A00, 6, drive_tx_entries},
+};
+
+ec_sync_info_t drive_syncs[] = {
+    {2, EC_DIR_OUTPUT, 1, drive_rx_pdos, EC_WD_ENABLE},
+    {3, EC_DIR_INPUT, 1, drive_tx_pdos, EC_WD_DISABLE},
+    {0xff},
+};
+
+PdoEntrySpec drive_entries[] = {
+    {"Target Position", PdoDirection::Output, 0x607A, 0x00, 32, 0, 0},
+    {"Target Velocity", PdoDirection::Output, 0x60FF, 0x00, 32, 0, 0},
+    {"Target Torque", PdoDirection::Output, 0x6071, 0x00, 16, 0, 0},
+    {"Control Word", PdoDirection::Output, 0x6040, 0x00, 16, 0, 0},
+    {"Modes of Operation", PdoDirection::Output, 0x6060, 0x00, 8, 0, 0},
+    {"Status Word", PdoDirection::Input, 0x6041, 0x00, 16, 0, 0},
+    {"Position Actual Value", PdoDirection::Input, 0x6064, 0x00, 32, 0, 0},
+    {"Velocity Actual Value", PdoDirection::Input, 0x606C, 0x00, 32, 0, 0},
+    {"Torque Actual Value", PdoDirection::Input, 0x6077, 0x00, 16, 0, 0},
+    {"Auxiliary Position Actual Value", PdoDirection::Input, 0x20A0, 0x00, 32, 0, 0},
+    {"Analog Input", PdoDirection::Input, 0x2205, 0x02, 16, 0, 0},
+};
+
+SlaveSpec drive_slaves[] = {
+    {0, 0, 0, 0, "EtherCAT Drive", drive_syncs, drive_entries,
+     sizeof(drive_entries) / sizeof(drive_entries[0])},
+};
+
+}  // namespace
+
 StaticSlaveConfig defaultSlaveConfig() noexcept {
-    return {nullptr, 0};
+    return {drive_slaves, sizeof(drive_slaves) / sizeof(drive_slaves[0])};
+}
+
+bool applyDiscoveredIdentity(SlaveSpec &slave,
+                             std::uint32_t vendor_id,
+                             std::uint32_t product_code,
+                             std::string &error) noexcept {
+    error.clear();
+    if (vendor_id == 0 || product_code == 0) {
+        error = "discovered SII identity is invalid";
+        return false;
+    }
+
+    slave.vendor_id = vendor_id;
+    slave.product_code = product_code;
+    return true;
 }
 
 // Validates a static configuration structurally and returns the first exact
@@ -30,12 +97,12 @@ bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) no
 
         for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
             const SlaveSpec &slave = config.slaves[slave_index];
-            if (slave.vendor_id == 0) {
-                error = "slave[" + std::to_string(slave_index) + "] vendor_id must be non-zero";
+            if ((slave.vendor_id == 0) != (slave.product_code == 0)) {
+                error = "slave[" + std::to_string(slave_index) + "] vendor_id and product_code must be both zero or both non-zero";
                 return false;
             }
-            if (slave.product_code == 0) {
-                error = "slave[" + std::to_string(slave_index) + "] product_code must be non-zero";
+            if (slave.vendor_id == 0 && slave.alias != 0) {
+                error = "slave[" + std::to_string(slave_index) + "] SII identity discovery requires alias 0";
                 return false;
             }
             if (slave.name == nullptr || slave.name[0] == '\0') {

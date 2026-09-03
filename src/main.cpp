@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
     }
 
     // —— 第三步：取得编译期从站配置，并校验非空 ——
-    rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig(); // 当前默认表为空
+    rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig(); // 默认映射位置 0 的驱动器
     if (config.slave_count == 0U) { // 空配置意味着没有可驱动的从站
         std::cerr << "no slave configuration compiled" << '\n'; // 报错并说明原因
         return EXIT_FAILURE; // 尚未请求主站/建 IPC/提实时权限，安全退出

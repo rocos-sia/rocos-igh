@@ -10,7 +10,7 @@
 
 - 最小主站骨架已实现：进程入口 [src/main.cpp](src/main.cpp)、IgH 生命周期 [src/ethercat_master.cpp](src/ethercat_master.cpp)、绝对时间周期任务 [src/cyclic_task.cpp](src/cyclic_task.cpp)、编译期从站配置 [src/slave_config.cpp](src/slave_config.cpp)、命令行解析 [src/runtime_options.cpp](src/runtime_options.cpp)，以及 IPC/共享 ABI [src/shared_memory_config.hpp](src/shared_memory_config.hpp)。
 - 构建目标已就绪：`rocos_igh_core`（主站模式下静态库、无硬件模式下接口库）、`rocos_igh_master`（可执行）和 `shared_memory_config_test`（CTest）。两种构建模式与命令见 [README.md](README.md)。
-- 默认从站配置为空（`defaultSlaveConfig()` 返回 0 从站），`rocos_igh_master` 启动即退出并报 `no slave configuration compiled`；接入真实从站需在 [src/slave_config.cpp](src/slave_config.cpp) 添加 `StaticSlaveConfig` 静态表并同步测试。
+- 默认从站配置映射 alias 0、总线位置 0 的单个驱动器；PDO 表见 [docs/pdo-config.md](docs/pdo-config.md)。`vendor_id/product_code` 使用 `0/0` 表示初始化时从扫描到的 SII 信息读取并显示，之后仍以实际值交给 IgH 严格匹配。
 - `.vscode` 中的 ROS 2 设置不是项目依赖依据；除非构建文件明确引入，否则不要添加 ROS 依赖。
 
 ## 架构约束

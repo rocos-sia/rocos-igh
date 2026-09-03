@@ -42,8 +42,8 @@ struct PdoEntrySpec {
 struct SlaveSpec {
     std::uint16_t alias;         ///< Slave alias (0 = use position).
     std::uint16_t position;      ///< Bus position, or offset from the alias.
-    std::uint32_t vendor_id;     ///< Expected vendor ID.
-    std::uint32_t product_code;  ///< Expected product code.
+    std::uint32_t vendor_id;     ///< Expected vendor ID, or 0 with product_code 0 to discover it.
+    std::uint32_t product_code;  ///< Expected product code, or 0 with vendor_id 0 to discover it.
     const char *name;            ///< Human-readable slave name.
     const ec_sync_info_t *syncs; ///< IgH sync-manager/PDO table (EC_END terminated).
     PdoEntrySpec *entries;       ///< PDO entry descriptors (mutable offsets).
@@ -59,9 +59,17 @@ struct StaticSlaveConfig {
 };
 
 /**
- * @brief Returns the (currently empty) default slave configuration.
+ * @brief Returns the default position-zero drive configuration.
  */
 StaticSlaveConfig defaultSlaveConfig() noexcept;
+
+/**
+ * @brief Applies a non-zero identity read from scanned SII information.
+ */
+bool applyDiscoveredIdentity(SlaveSpec &slave,
+                             std::uint32_t vendor_id,
+                             std::uint32_t product_code,
+                             std::string &error) noexcept;
 
 /**
  * @brief Validates a static configuration structurally.

@@ -2,6 +2,9 @@
 
 #include "shared_memory_config.hpp"
 
+#include <iomanip>
+#include <iostream>
+
 namespace rocos {
 
 // Releases the requested IgH master and drops all borrowed pointers.
@@ -34,6 +37,35 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
         error = "failed to request EtherCAT master";
         reset();
         return false;
+    }
+
+    for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
+        SlaveSpec &slave = config.slaves[slave_index];
+        if (slave.vendor_id != 0) {
+            continue;
+        }
+
+        ec_slave_info_t slave_info{};
+        if (ecrt_master_get_slave(master_, slave.position, &slave_info) != 0) {
+            error = "failed to read SII identity for slave[" + std::to_string(slave_index) + "]";
+            reset();
+            return false;
+        }
+        if (!applyDiscoveredIdentity(slave, slave_info.vendor_id, slave_info.product_code, error)) {
+            error += " for slave[" + std::to_string(slave_index) + "]";
+            reset();
+            return false;
+        }
+    }
+
+    for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
+        const SlaveSpec &slave = config.slaves[slave_index];
+        std::cout << "slave[" << slave_index << "] alias=" << slave.alias
+                  << " position=" << slave.position
+                  << " vendor_id=0x" << std::hex << std::setfill('0') << std::setw(8)
+                  << slave.vendor_id
+                  << " product_code=0x" << std::setw(8) << slave.product_code
+                  << std::dec << std::setfill(' ') << '\n';
     }
 
     input_domain_ = ecrt_master_create_domain(master_);

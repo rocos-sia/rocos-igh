@@ -37,11 +37,14 @@ The executable is `rocos_igh_master` and supports:
 - `--period-us <integer >= 1000>`
 - `--help`
 
-Current checked-in slave configuration is intentionally empty (`defaultSlaveConfig()` returns zero slaves), so startup exits with:
+The checked-in configuration maps one drive at alias 0, ring position 0. It uses
+RxPDO `0x1600` on SM2 and TxPDO `0x1A00` on SM3 with the entries documented in
+[PDO configuration](docs/pdo-config.md).
 
-`no slave configuration compiled`
-
-This failure happens before requesting an EtherCAT master, creating IPC, or applying realtime privileges.
+The drive identity is not fixed at compile time. Startup reads the vendor ID and
+product code from the scanned SII data, prints both values, and then passes the
+resolved identity to IgH for strict matching. Startup fails before creating IPC
+or applying realtime privileges when the slave at position 0 is unavailable.
 
 ## Additional docs
 

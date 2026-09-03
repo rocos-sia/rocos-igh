@@ -57,7 +57,7 @@ ctest --test-dir build -R shared_memory_config --output-on-failure
 - **实时路径**：激活后的周期循环禁止动态内存分配、阻塞 I/O、日志、SDO、从站重配、互斥锁；只允许 IgH 标记 `rt_safe` 的调用。`mlockall`、内存预触碰、`SCHED_FIFO`（优先级 80）都在进入循环前完成。
 - **master_id 隔离**：同一个非负 `master_id` 贯穿 IgH 主站索引与全部 IPC 命名；命名约定为 `ecm{id}`、`pd_input{id}`、`pd_output{id}`、`sync{id}_{0..9}`（POSIX 调用需补前导 `/`，由 `toPosixName` 处理）。禁止跨主站共享可变状态。
 - **周期下限**：`period_us` 最小为 `1000`（1 ms 是设计目标，非普通 Linux 下的确定性保证）。
-- **空默认配置**：`defaultSlaveConfig()` 返回 0 从站，接入真实从站需在 [src/slave_config.cpp](src/slave_config.cpp) 添加 `StaticSlaveConfig` 静态表并同步元数据测试。PDO 条目要求字节对齐（`bit_length % 8 == 0`、`bit_position == 0`）。
+- **默认驱动器配置**：`defaultSlaveConfig()` 映射 alias 0、总线位置 0 的单个驱动器，使用 `0x1600` RxPDO/SM2 和 `0x1A00` TxPDO/SM3。`vendor_id/product_code == 0/0` 表示初始化时从 SII 读取并显示实际身份；半零身份和非零 alias 的动态身份配置无效。PDO 条目要求字节对齐（`bit_length % 8 == 0`、`bit_position == 0`）。
 - **测试隔离**：无硬件测试用 `10000 + getpid() % 10000` 生成唯一主站 ID 避免并行冲突；`EC_SEM_NUM`（10）同时限制每主站等待线程数。
 
 ## 相关文档
