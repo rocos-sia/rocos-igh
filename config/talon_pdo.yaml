@@ -15,7 +15,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -35,7 +35,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -55,7 +55,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -75,7 +75,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -95,7 +95,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -115,7 +115,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
@@ -135,7 +135,7 @@ slaves:
     tx_pdos:
       - index: 0x1A07
         entries:
-          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}
           - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
           - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
           - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
