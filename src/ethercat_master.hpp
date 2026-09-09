@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include <ecrt.h>
@@ -78,6 +79,15 @@ public:
 private:
     friend struct EthercatMasterTestPeer;
 
+    static bool slaveReadyForConfiguration(const ec_slave_info_t &slave_info) noexcept;
+    bool waitForSlavesInPreop(const StaticSlaveConfig &config,
+                              std::string &error);
+    static bool waitForSlavesInPreop(
+        const StaticSlaveConfig &config,
+        std::string &error,
+        const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
+        const std::function<void()> &wait,
+        std::size_t max_attempts);
     void reset() noexcept;
 
     ec_master_t *master_{nullptr};

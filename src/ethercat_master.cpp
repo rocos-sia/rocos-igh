@@ -2,7 +2,17 @@
 
 #include "shared_memory_config.hpp"
 
+#include <chrono>
+#include <thread>
+
 namespace rocos {
+
+namespace {
+
+constexpr auto kPreopPollInterval = std::chrono::milliseconds(10);
+constexpr std::size_t kPreopMaxAttempts = 500U;
+
+}  // namespace
 
 // Releases the requested IgH master and drops all borrowed pointers.
 EthercatMaster::~EthercatMaster() {
@@ -32,6 +42,13 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
     master_ = ecrt_request_master(master_id);
     if (master_ == nullptr) {
         error = "failed to request EtherCAT master";
+        reset();
+        return false;
+    }
+
+    // IgH requests PREOP asynchronously when the master is reserved. Activating
+    // while a slave is still OP can overwrite that request and skip reconfiguration.
+    if (!waitForSlavesInPreop(config, error)) {
         reset();
         return false;
     }
@@ -159,6 +176,61 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
 
     initialized_ = true;
     return true;
+}
+
+bool EthercatMaster::slaveReadyForConfiguration(const ec_slave_info_t &slave_info) noexcept {
+    return slave_info.al_state == EC_AL_STATE_PREOP && slave_info.error_flag == 0U;
+}
+
+bool EthercatMaster::waitForSlavesInPreop(const StaticSlaveConfig &config,
+                                          std::string &error) {
+    const auto query = [this](std::uint16_t position, ec_slave_info_t &slave_info) {
+        return ecrt_master_get_slave(master_, position, &slave_info);
+    };
+    const auto wait = [] { std::this_thread::sleep_for(kPreopPollInterval); };
+    return waitForSlavesInPreop(config, error, query, wait, kPreopMaxAttempts);
+}
+
+bool EthercatMaster::waitForSlavesInPreop(
+    const StaticSlaveConfig &config,
+    std::string &error,
+    const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
+    const std::function<void()> &wait,
+    std::size_t max_attempts) {
+    error.clear();
+    std::size_t pending_slave = 0;
+    ec_slave_info_t pending_info{};
+
+    for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
+        bool all_ready = true;
+        for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
+            const SlaveSpec &slave = config.slaves[slave_index];
+            ec_slave_info_t slave_info{};
+            if (query(slave.position, slave_info) != 0) {
+                error = "failed to read state for slave[" + std::to_string(slave_index) + "]";
+                return false;
+            }
+            if (!slaveReadyForConfiguration(slave_info)) {
+                all_ready = false;
+                pending_slave = slave_index;
+                pending_info = slave_info;
+            }
+        }
+
+        if (all_ready) {
+            return true;
+        }
+        if (attempt + 1U < max_attempts) {
+            wait();
+        }
+    }
+
+    error = "timed out waiting for slave[" + std::to_string(pending_slave) +
+            "] to reach PREOP (al_state=" +
+            std::to_string(static_cast<unsigned int>(pending_info.al_state)) +
+            ", error_flag=" +
+            std::to_string(static_cast<unsigned int>(pending_info.error_flag)) + ")";
+    return false;
 }
 
 // Receives a frame and processes both domains' working counters (rt_safe).

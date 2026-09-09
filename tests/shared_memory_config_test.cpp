@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <atomic>
@@ -23,6 +24,20 @@
 #if ROCOS_IGH_BUILD_MASTER
 namespace rocos {
 struct EthercatMasterTestPeer {
+    static bool slaveReadyForConfiguration(const ec_slave_info_t &slave_info) {
+        return EthercatMaster::slaveReadyForConfiguration(slave_info);
+    }
+
+    static bool waitForSlavesInPreop(
+        const StaticSlaveConfig &config,
+        std::string &error,
+        const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
+        const std::function<void()> &wait,
+        std::size_t max_attempts) {
+        return EthercatMaster::waitForSlavesInPreop(
+            config, error, query, wait, max_attempts);
+    }
+
     static void seedState(EthercatMaster &master,
                           bool initialized,
                           ec_master_t *master_ptr,
@@ -649,6 +664,58 @@ bool testApplyDiscoveredIdentity() {
     return true;
 }
 
+bool testSlaveMustReachErrorFreePreopBeforeConfiguration() {
+    ec_slave_info_t slave_info{};
+    slave_info.al_state = EC_AL_STATE_PREOP;
+    CHECK(rocos::EthercatMasterTestPeer::slaveReadyForConfiguration(slave_info));
+
+    slave_info.al_state = EC_AL_STATE_OP;
+    CHECK(!rocos::EthercatMasterTestPeer::slaveReadyForConfiguration(slave_info));
+
+    slave_info.al_state = EC_AL_STATE_PREOP;
+    slave_info.error_flag = 1U;
+    CHECK(!rocos::EthercatMasterTestPeer::slaveReadyForConfiguration(slave_info));
+    return true;
+}
+
+bool testWaitsForAllSlavesToReachPreop() {
+    rocos::SlaveSpec slaves[2]{};
+    slaves[0].position = 0;
+    slaves[1].position = 1;
+    const rocos::StaticSlaveConfig config{slaves, 2};
+
+    std::size_t second_slave_queries = 0;
+    std::size_t waits = 0;
+    const auto query = [&](std::uint16_t position, ec_slave_info_t &info) {
+        info.error_flag = 0;
+        if (position == 1U && second_slave_queries++ == 0U) {
+            info.al_state = EC_AL_STATE_OP;
+        } else {
+            info.al_state = EC_AL_STATE_PREOP;
+        }
+        return 0;
+    };
+    std::string error;
+    CHECK(rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
+        config, error, query, [&] { ++waits; }, 3U));
+    CHECK(error.empty());
+    CHECK(waits == 1U);
+
+    const auto failed_query = [](std::uint16_t, ec_slave_info_t &) { return -1; };
+    CHECK(!rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
+        config, error, failed_query, [] {}, 3U));
+    CHECK(error.find("failed to read state for slave[0]") != std::string::npos);
+
+    const auto always_op = [](std::uint16_t, ec_slave_info_t &info) {
+        info.al_state = EC_AL_STATE_OP;
+        return 0;
+    };
+    CHECK(!rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
+        config, error, always_op, [] {}, 2U));
+    CHECK(error.find("timed out waiting for slave[1]") != std::string::npos);
+    return true;
+}
+
 bool testMasterCyclicCallsBeforeInitialization() {
     rocos::EthercatMaster master;
     CHECK(!master.initialized());
@@ -847,6 +914,12 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testApplyDiscoveredIdentity()) {
+        return EXIT_FAILURE;
+    }
+    if (!testSlaveMustReachErrorFreePreopBeforeConfiguration()) {
+        return EXIT_FAILURE;
+    }
+    if (!testWaitsForAllSlavesToReachPreop()) {
         return EXIT_FAILURE;
     }
     if (!testMasterCyclicCallsBeforeInitialization()) {
