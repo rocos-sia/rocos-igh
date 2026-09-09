@@ -11,14 +11,15 @@ namespace rocos {
 struct RuntimeOptions {
     unsigned int master_id{0};     ///< Non-negative EtherCAT master index.
     std::uint32_t period_us{1000}; ///< Cycle period in microseconds (>= 1000).
+    std::string config_path;       ///< Required PDO YAML configuration path.
     bool show_help{false};         ///< True when --help was requested.
 };
 
 /**
  * @brief Parses argv strictly into @p options.
  *
- * Accepts --master-id, --period-us, and --help. Rejects unknown flags, missing
- * values, signs, trailing characters, and integer overflow.
+ * Accepts --config, --master-id, --period-us, and --help. Rejects unknown
+ * flags, missing values, duplicates, signs, trailing characters, and overflow.
  *
  * @param argc    Argument count.
  * @param argv    Argument vector.

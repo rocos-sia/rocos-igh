@@ -3,6 +3,7 @@
 #include "runtime_options.hpp"
 #if ROCOS_IGH_BUILD_MASTER
 #include "ethercat_master.hpp"
+#include "pdo_config.hpp"
 #include "slave_config.hpp"
 #endif
 
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <atomic>
 #include <type_traits>
 #include <stdexcept>
@@ -347,23 +349,54 @@ bool testRuntimeOptions() {
     char master_value[] = "1";
     char period_flag[] = "--period-us";
     char period_value[] = "1000";
-    char *valid[]{program, master_flag, master_value, period_flag, period_value};
+    char config_flag[] = "--config";
+    char config_value[] = "config/pdo.yaml";
+    char *valid[]{program, master_flag, master_value, period_flag, period_value,
+                  config_flag, config_value};
 
     rocos::RuntimeOptions options{};
     std::string error;
-    CHECK(rocos::parseRuntimeOptions(5, valid, options, error));
+    CHECK(rocos::parseRuntimeOptions(7, valid, options, error));
     CHECK(error.empty());
     CHECK(options.master_id == 1U);
     CHECK(options.period_us == 1000U);
+    CHECK(options.config_path == "config/pdo.yaml");
+
+    char *missing_config[]{program, master_flag, master_value};
+    CHECK(!rocos::parseRuntimeOptions(3, missing_config, options, error));
+    CHECK(error.find("--config") != std::string::npos);
+
+    char empty_config[] = "";
+    char *invalid_config[]{program, config_flag, empty_config};
+    CHECK(!rocos::parseRuntimeOptions(3, invalid_config, options, error));
+
+    char second_config[] = "other.yaml";
+    char *duplicate_config[]{program, config_flag, config_value, config_flag, second_config};
+    CHECK(!rocos::parseRuntimeOptions(5, duplicate_config, options, error));
+
+    char second_master[] = "2";
+    char *duplicate_master[]{program, config_flag, config_value, master_flag, master_value,
+                             master_flag, second_master};
+    CHECK(!rocos::parseRuntimeOptions(7, duplicate_master, options, error));
+
+    char second_period[] = "2000";
+    char *duplicate_period[]{program, config_flag, config_value, period_flag, period_value,
+                             period_flag, second_period};
+    CHECK(!rocos::parseRuntimeOptions(7, duplicate_period, options, error));
+
+    char help_flag[] = "--help";
+    char *help_only[]{program, help_flag};
+    CHECK(rocos::parseRuntimeOptions(2, help_only, options, error));
+    CHECK(options.show_help);
 
     char short_period[] = "999";
-    char *invalid_period[]{program, period_flag, short_period};
-    CHECK(!rocos::parseRuntimeOptions(3, invalid_period, options, error));
+    char *invalid_period[]{program, config_flag, config_value, period_flag, short_period};
+    CHECK(!rocos::parseRuntimeOptions(5, invalid_period, options, error));
     CHECK(error.find("period-us") != std::string::npos);
 
     char negative_master[] = "-1";
-    char *invalid_master[]{program, master_flag, negative_master};
-    CHECK(!rocos::parseRuntimeOptions(3, invalid_master, options, error));
+    char *invalid_master[]{program, config_flag, config_value, master_flag, negative_master};
+    CHECK(!rocos::parseRuntimeOptions(5, invalid_master, options, error));
 
     char *missing_value[]{program, period_flag};
     CHECK(!rocos::parseRuntimeOptions(2, missing_value, options, error));
@@ -512,26 +545,31 @@ bool testPublishConfigMetadataBounds() {
     return true;
 }
 
-bool testDefaultSlavePdoMapping() {
-    struct ExpectedEntry {
-        const char *name;
-        rocos::PdoDirection direction;
-        std::uint16_t index;
-        std::uint8_t sub_index;
-        std::uint8_t bit_length;
+rocos::PdoBusConfig makeRuntimePdoConfig() {
+    rocos::PdoBusConfig config;
+    config.slaves = {
+        {0, "First Drive",
+         {{0x1600, {{"Target Position", 0x607A, 0, 32}}},
+          {0x1601, {{"Control Word", 0x6040, 0, 16}}}},
+         {{0x1A00, {{"Status Word", 0x6041, 0, 16}}}}},
+        {1, "Second Drive",
+         {{0x1600, {{"Digital Outputs", 0x60FE, 0, 32}}}},
+         {{0x1A00, {{"Digital Inputs", 0x60FD, 0, 32}}}}},
     };
+    return config;
+}
 
-    static constexpr ExpectedEntry expected[] = {
-        {"Target Position", rocos::PdoDirection::Output, 0x607A, 0, 32},
-        {"Digital Outputs", rocos::PdoDirection::Output, 0x60FE, 0, 32},
-        {"Control Word", rocos::PdoDirection::Output, 0x6040, 0, 16},
-        {"Position Actual Value", rocos::PdoDirection::Input, 0x6064, 0, 32},
-        {"Digital Inputs", rocos::PdoDirection::Input, 0x60FD, 0, 32},
-        {"Status Word", rocos::PdoDirection::Input, 0x6041, 0, 16},
-    };
+bool testBuildsRuntimeSlavePdoMapping() {
+    static_assert(!std::is_copy_constructible<rocos::LoadedSlaveConfig>::value,
+                  "pointer-bearing configuration must not be copied");
 
-    const rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig();
-    CHECK(config.slave_count == 1U);
+    rocos::LoadedSlaveConfig loaded;
+    std::string error;
+    CHECK(loaded.build(makeRuntimePdoConfig(), error));
+    CHECK(error.empty());
+
+    const rocos::StaticSlaveConfig config = loaded.view();
+    CHECK(config.slave_count == 2U);
     CHECK(config.slaves != nullptr);
 
     const rocos::SlaveSpec &slave = config.slaves[0];
@@ -540,29 +578,55 @@ bool testDefaultSlavePdoMapping() {
     CHECK(slave.vendor_id == 0U);
     CHECK(slave.product_code == 0U);
     CHECK(slave.syncs != nullptr);
-    CHECK(slave.entry_count == (sizeof(expected) / sizeof(expected[0])));
+    CHECK(slave.entry_count == 3U);
 
     CHECK(slave.syncs[0].index == 2U);
     CHECK(slave.syncs[0].dir == EC_DIR_OUTPUT);
-    CHECK(slave.syncs[0].n_pdos == 1U);
+    CHECK(slave.syncs[0].n_pdos == 2U);
     CHECK(slave.syncs[0].pdos[0].index == 0x1600U);
-    CHECK(slave.syncs[0].pdos[0].n_entries == 3U);
+    CHECK(slave.syncs[0].pdos[0].n_entries == 1U);
+    CHECK(slave.syncs[0].pdos[1].index == 0x1601U);
+    CHECK(slave.syncs[0].pdos[1].entries[0].index == 0x6040U);
     CHECK(slave.syncs[0].watchdog_mode == EC_WD_ENABLE);
     CHECK(slave.syncs[1].index == 3U);
     CHECK(slave.syncs[1].dir == EC_DIR_INPUT);
     CHECK(slave.syncs[1].n_pdos == 1U);
     CHECK(slave.syncs[1].pdos[0].index == 0x1A00U);
-    CHECK(slave.syncs[1].pdos[0].n_entries == 3U);
+    CHECK(slave.syncs[1].pdos[0].n_entries == 1U);
     CHECK(slave.syncs[1].watchdog_mode == EC_WD_DISABLE);
     CHECK(slave.syncs[2].index == 0xffU);
 
-    for (std::size_t index = 0; index < slave.entry_count; ++index) {
-        CHECK(std::string(slave.entries[index].name) == expected[index].name);
-        CHECK(slave.entries[index].direction == expected[index].direction);
-        CHECK(slave.entries[index].index == expected[index].index);
-        CHECK(slave.entries[index].sub_index == expected[index].sub_index);
-        CHECK(slave.entries[index].bit_length == expected[index].bit_length);
-    }
+    CHECK(std::string(slave.entries[0].name) == "Target Position");
+    CHECK(slave.entries[0].direction == rocos::PdoDirection::Output);
+    CHECK(slave.entries[1].direction == rocos::PdoDirection::Output);
+    CHECK(slave.entries[2].direction == rocos::PdoDirection::Input);
+    CHECK(config.slaves[1].position == 1U);
+    CHECK(std::string(config.slaves[1].name) == "Second Drive");
+    return true;
+}
+
+bool testPrintsRuntimeSlavePdoMapping() {
+    rocos::LoadedSlaveConfig loaded;
+    std::string error;
+    CHECK(loaded.build(makeRuntimePdoConfig(), error));
+
+    rocos::StaticSlaveConfig config = loaded.view();
+    config.slaves[0].vendor_id = 0x000000ABU;
+    config.slaves[0].product_code = 0x00001234U;
+    config.slaves[0].entries[0].offset = 4U;
+    config.slaves[0].entries[1].offset = 8U;
+    config.slaves[0].entries[2].offset = 0U;
+
+    std::ostringstream output;
+    rocos::printLoadedSlaveConfig(loaded, output);
+    const std::string text = output.str();
+    CHECK(text.find("Slave 0: First Drive") != std::string::npos);
+    CHECK(text.find("vendor=0x000000ab product=0x00001234") != std::string::npos);
+    CHECK(text.find("RxPDO 0x1600 (SM2, master -> slave)") != std::string::npos);
+    CHECK(text.find("RxPDO 0x1601 (SM2, master -> slave)") != std::string::npos);
+    CHECK(text.find("TxPDO 0x1a00 (SM3, slave -> master)") != std::string::npos);
+    CHECK(text.find("0x607a:00  32 bit  offset=4  Target Position") != std::string::npos);
+    CHECK(text.find("0x6041:00  16 bit  offset=0  Status Word") != std::string::npos);
     return true;
 }
 
@@ -625,7 +689,8 @@ bool testInitializeRejectsAlreadyInitializedWithoutReset() {
                                              128);
 
     std::string error;
-    CHECK(!master.initialize(0, rocos::defaultSlaveConfig(), error));
+    const rocos::StaticSlaveConfig empty_config{};
+    CHECK(!master.initialize(0, empty_config, error));
     CHECK(error == "master already initialized");
     CHECK(master.initialized());
     CHECK(master.inputData() == seeded_input);
@@ -676,7 +741,9 @@ bool testInitializeFreshFailureResetsState() {
 
 bool testSlaveConfigValidation() {
     std::string error;
-    CHECK(rocos::validateSlaveConfig(rocos::defaultSlaveConfig(), error));
+    rocos::LoadedSlaveConfig loaded;
+    CHECK(loaded.build(makeRuntimePdoConfig(), error));
+    CHECK(rocos::validateSlaveConfig(loaded.view(), error));
 
     static const ec_sync_info_t sync_table[1] = {};
     rocos::SlaveSpec half_wildcard_slave{
@@ -773,7 +840,10 @@ int main() {
     if (!testPublishConfigMetadataBounds()) {
         return EXIT_FAILURE;
     }
-    if (!testDefaultSlavePdoMapping()) {
+    if (!testBuildsRuntimeSlavePdoMapping()) {
+        return EXIT_FAILURE;
+    }
+    if (!testPrintsRuntimeSlavePdoMapping()) {
         return EXIT_FAILURE;
     }
     if (!testApplyDiscoveredIdentity()) {

@@ -34,6 +34,9 @@ bool parseUnsigned(std::string_view text, std::uint64_t &value) noexcept {
 bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error) {
     error.clear();
     options = RuntimeOptions{};
+    bool config_seen = false;
+    bool master_id_seen = false;
+    bool period_us_seen = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag(argv[i]);
@@ -41,7 +44,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             options.show_help = true;
             continue;
         }
-        if (flag != "--master-id" && flag != "--period-us") {
+        if (flag != "--config" && flag != "--master-id" && flag != "--period-us") {
             error = "unknown option: " + std::string(flag);
             return false;
         }
@@ -52,6 +55,20 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         }
 
         const std::string_view value_text(argv[++i]);
+        if (flag == "--config") {
+            if (config_seen) {
+                error = "duplicate option: --config";
+                return false;
+            }
+            if (value_text.empty() || value_text.rfind("--", 0) == 0) {
+                error = "invalid value for option: --config";
+                return false;
+            }
+            options.config_path = std::string(value_text);
+            config_seen = true;
+            continue;
+        }
+
         std::uint64_t parsed_value = 0;
         if (!parseUnsigned(value_text, parsed_value)) {
             error = "invalid value for option: " + std::string(flag);
@@ -59,14 +76,23 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         }
 
         if (flag == "--master-id") {
+            if (master_id_seen) {
+                error = "duplicate option: --master-id";
+                return false;
+            }
             if (parsed_value > static_cast<std::uint64_t>(std::numeric_limits<unsigned int>::max())) {
                 error = "master-id is out of range";
                 return false;
             }
             options.master_id = static_cast<unsigned int>(parsed_value);
+            master_id_seen = true;
             continue;
         }
 
+        if (period_us_seen) {
+            error = "duplicate option: --period-us";
+            return false;
+        }
         if (parsed_value > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
             error = "period-us is out of range";
             return false;
@@ -76,6 +102,12 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             return false;
         }
         options.period_us = static_cast<std::uint32_t>(parsed_value);
+        period_us_seen = true;
+    }
+
+    if (!options.show_help && !config_seen) {
+        error = "missing required option: --config";
+        return false;
     }
 
     return true;
@@ -83,7 +115,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master [--master-id <id>] [--period-us <period>] [--help]";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--help]";
 }
 
 }  // namespace rocos

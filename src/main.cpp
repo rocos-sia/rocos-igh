@@ -9,9 +9,10 @@
 // 本工程自身头文件：引入各组件接口。
 #include "cyclic_task.hpp"          // 绝对时间周期任务（CyclicTask）
 #include "ethercat_master.hpp"      // IgH 主站生命周期封装（EthercatMaster）
+#include "pdo_config.hpp"           // YAML PDO 配置解析（PdoBusConfig）
 #include "runtime_options.hpp"      // 命令行参数解析（RuntimeOptions）
 #include "shared_memory_config.hpp" // 共享内存 IPC 与跨进程 ABI（SharedMemoryConfig）
-#include "slave_config.hpp"         // 编译期从站配置（StaticSlaveConfig）
+#include "slave_config.hpp"         // 动态 IgH 配置所有权（LoadedSlaveConfig）
 
 // 标准库与系统头文件。
 #include <array>       // std::array（预触碰栈缓冲区）
@@ -23,6 +24,7 @@
 #include <sched.h>     // sched_param / SCHED_FIFO / sched_setscheduler
 #include <string>      // std::string
 #include <sys/mman.h>  // mlockall / MCL_CURRENT / MCL_FUTURE
+#include <utility>     // std::move
 
 namespace {
 
@@ -118,17 +120,24 @@ int main(int argc, char **argv) {
         return EXIT_SUCCESS; // 正常退出
     }
 
-    // —— 第二步：安装信号处理器 ——
-    if (!installSignalHandlers(error)) {
+    // —— 第二步：加载 YAML PDO 配置并构建 IgH 配置视图 ——
+    rocos::PdoBusConfig pdo_config;
+    if (!rocos::loadPdoConfig(options.config_path, pdo_config, error)) {
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
 
-    // —— 第三步：取得编译期从站配置，并校验非空 ——
-    rocos::StaticSlaveConfig config = rocos::defaultSlaveConfig(); // 默认映射位置 0 的驱动器
-    if (config.slave_count == 0U) { // 空配置意味着没有可驱动的从站
-        std::cerr << "no slave configuration compiled" << '\n'; // 报错并说明原因
-        return EXIT_FAILURE; // 尚未请求主站/建 IPC/提实时权限，安全退出
+    rocos::LoadedSlaveConfig loaded_config;
+    if (!loaded_config.build(std::move(pdo_config), error)) {
+        std::cerr << error << '\n';
+        return EXIT_FAILURE;
+    }
+    rocos::StaticSlaveConfig config = loaded_config.view();
+
+    // —— 第三步：安装信号处理器 ——
+    if (!installSignalHandlers(error)) {
+        std::cerr << error << '\n';
+        return EXIT_FAILURE;
     }
 
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
@@ -137,6 +146,7 @@ int main(int argc, char **argv) {
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
+    rocos::printLoadedSlaveConfig(loaded_config, std::cout);
 
     // —— 第五步：创建共享内存 IPC（总线快照 + PDO 缓冲区）——
     rocos::SharedMemoryConfig ipc(static_cast<int>(options.master_id)); // 按 master_id 隔离命名

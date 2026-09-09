@@ -2,7 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
+#include <memory>
 #include <string>
+
+#include "pdo_config.hpp"
 
 #if ROCOS_IGH_BUILD_MASTER
 #include <ecrt.h>
@@ -58,10 +62,30 @@ struct StaticSlaveConfig {
     std::size_t slave_count; ///< Number of slaves.
 };
 
-/**
- * @brief Returns the default position-zero drive configuration.
- */
-StaticSlaveConfig defaultSlaveConfig() noexcept;
+#if ROCOS_IGH_BUILD_MASTER
+/** @brief Owns dynamic IgH configuration storage and exposes stable pointer views. */
+class LoadedSlaveConfig {
+public:
+    LoadedSlaveConfig();
+    ~LoadedSlaveConfig();
+
+    LoadedSlaveConfig(const LoadedSlaveConfig &) = delete;
+    LoadedSlaveConfig &operator=(const LoadedSlaveConfig &) = delete;
+    LoadedSlaveConfig(LoadedSlaveConfig &&) noexcept;
+    LoadedSlaveConfig &operator=(LoadedSlaveConfig &&) noexcept;
+
+    bool build(PdoBusConfig config, std::string &error) noexcept;
+    StaticSlaveConfig view() noexcept;
+
+private:
+    friend void printLoadedSlaveConfig(const LoadedSlaveConfig &, std::ostream &);
+
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output);
+#endif
 
 /**
  * @brief Applies a non-zero identity read from scanned SII information.

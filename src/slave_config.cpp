@@ -3,58 +3,197 @@
 #include "shared_memory_config.hpp"
 
 #include <cstring>
+#include <iomanip>
 #include <limits>
+#include <memory>
+#include <ostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace rocos {
 
+#if ROCOS_IGH_BUILD_MASTER
+struct LoadedSlaveConfig::Impl {
+    struct PdoStorage {
+        std::uint16_t index{0};
+        std::vector<ec_pdo_entry_info_t> entries;
+    };
+
+    struct SlaveStorage {
+        std::uint16_t id{0};
+        std::string name;
+        std::vector<std::string> entry_names;
+        std::vector<PdoStorage> rx_storage;
+        std::vector<PdoStorage> tx_storage;
+        std::vector<ec_pdo_info_t> rx_pdos;
+        std::vector<ec_pdo_info_t> tx_pdos;
+        std::vector<ec_sync_info_t> syncs;
+        std::vector<PdoEntrySpec> entries;
+    };
+
+    std::vector<SlaveStorage> storage;
+    std::vector<SlaveSpec> slaves;
+};
+
 namespace {
 
-ec_pdo_entry_info_t drive_rx_entries[] = {
-    {0x607A, 0x00, 32},
-    {0x60FE, 0x00, 32},
-    {0x6040, 0x00, 16},
-};
+std::size_t entryCount(const std::vector<PdoMappingConfig> &pdos) {
+    std::size_t count = 0;
+    for (const PdoMappingConfig &pdo : pdos) {
+        count += pdo.entries.size();
+    }
+    return count;
+}
 
-ec_pdo_entry_info_t drive_tx_entries[] = {
-    {0x6064, 0x00, 32},
-    {0x60FD, 0x00, 32},
-    {0x6041, 0x00, 16},
-};
+template <typename PdoStorageVector>
+void storePdos(const std::vector<PdoMappingConfig> &source,
+               PdoStorageVector &target) {
+    target.reserve(source.size());
+    for (const PdoMappingConfig &source_pdo : source) {
+        typename PdoStorageVector::value_type pdo;
+        pdo.index = source_pdo.index;
+        pdo.entries.reserve(source_pdo.entries.size());
+        for (const PdoEntryConfig &entry : source_pdo.entries) {
+            pdo.entries.push_back({entry.index, entry.sub_index, entry.bit_length});
+        }
+        target.push_back(std::move(pdo));
+    }
+}
 
-ec_pdo_info_t drive_rx_pdos[] = {
-    {0x1600, 3, drive_rx_entries},
-};
+template <typename PdoStorageVector>
+void buildPdoViews(const PdoStorageVector &storage,
+                   std::vector<ec_pdo_info_t> &views) {
+    views.reserve(storage.size());
+    for (const auto &pdo : storage) {
+        views.push_back({pdo.index, static_cast<unsigned int>(pdo.entries.size()),
+                         pdo.entries.data()});
+    }
+}
 
-ec_pdo_info_t drive_tx_pdos[] = {
-    {0x1A00, 3, drive_tx_entries},
-};
-
-ec_sync_info_t drive_syncs[] = {
-    {2, EC_DIR_OUTPUT, 1, drive_rx_pdos, EC_WD_ENABLE},
-    {3, EC_DIR_INPUT, 1, drive_tx_pdos, EC_WD_DISABLE},
-    {0xff},
-};
-
-PdoEntrySpec drive_entries[] = {
-    {"Target Position", PdoDirection::Output, 0x607A, 0x00, 32, 0, 0},
-    {"Digital Outputs", PdoDirection::Output, 0x60FE, 0x00, 32, 0, 0},
-    {"Control Word", PdoDirection::Output, 0x6040, 0x00, 16, 0, 0},
-    {"Position Actual Value", PdoDirection::Input, 0x6064, 0x00, 32, 0, 0},
-    {"Digital Inputs", PdoDirection::Input, 0x60FD, 0x00, 32, 0, 0},
-    {"Status Word", PdoDirection::Input, 0x6041, 0x00, 16, 0, 0},
-};
-
-SlaveSpec drive_slaves[] = {
-    {0, 0, 0, 0, "EtherCAT Drive", drive_syncs, drive_entries,
-     sizeof(drive_entries) / sizeof(drive_entries[0])},
-};
+template <typename SlaveStorage>
+void appendEntryViews(const std::vector<PdoMappingConfig> &pdos,
+                      PdoDirection direction,
+                      SlaveStorage &storage) {
+    for (const PdoMappingConfig &pdo : pdos) {
+        for (const PdoEntryConfig &entry : pdo.entries) {
+            storage.entry_names.push_back(entry.name);
+            storage.entries.push_back({nullptr, direction, entry.index, entry.sub_index,
+                                       entry.bit_length, 0, 0});
+        }
+    }
+}
 
 }  // namespace
 
-StaticSlaveConfig defaultSlaveConfig() noexcept {
-    return {drive_slaves, sizeof(drive_slaves) / sizeof(drive_slaves[0])};
+LoadedSlaveConfig::LoadedSlaveConfig() : impl_(std::make_unique<Impl>()) {}
+LoadedSlaveConfig::~LoadedSlaveConfig() = default;
+LoadedSlaveConfig::LoadedSlaveConfig(LoadedSlaveConfig &&) noexcept = default;
+LoadedSlaveConfig &LoadedSlaveConfig::operator=(LoadedSlaveConfig &&) noexcept = default;
+
+bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept {
+    try {
+        error.clear();
+        auto built = std::make_unique<Impl>();
+        built->storage.resize(config.slaves.size());
+        built->slaves.reserve(config.slaves.size());
+
+        for (std::size_t slave_index = 0; slave_index < config.slaves.size(); ++slave_index) {
+            const SlavePdoConfig &source = config.slaves[slave_index];
+            Impl::SlaveStorage &target = built->storage[slave_index];
+            target.id = source.id;
+            target.name = source.name;
+
+            const std::size_t total_entries = entryCount(source.rx_pdos) +
+                                              entryCount(source.tx_pdos);
+            target.entry_names.reserve(total_entries);
+            target.entries.reserve(total_entries);
+            storePdos(source.rx_pdos, target.rx_storage);
+            storePdos(source.tx_pdos, target.tx_storage);
+            buildPdoViews(target.rx_storage, target.rx_pdos);
+            buildPdoViews(target.tx_storage, target.tx_pdos);
+            appendEntryViews(source.rx_pdos, PdoDirection::Output, target);
+            appendEntryViews(source.tx_pdos, PdoDirection::Input, target);
+
+            for (std::size_t entry_index = 0; entry_index < target.entries.size(); ++entry_index) {
+                target.entries[entry_index].name = target.entry_names[entry_index].c_str();
+            }
+
+            target.syncs = {
+                {2, EC_DIR_OUTPUT, static_cast<unsigned int>(target.rx_pdos.size()),
+                 target.rx_pdos.data(), EC_WD_ENABLE},
+                {3, EC_DIR_INPUT, static_cast<unsigned int>(target.tx_pdos.size()),
+                 target.tx_pdos.data(), EC_WD_DISABLE},
+                {0xff},
+            };
+        }
+
+        for (Impl::SlaveStorage &target : built->storage) {
+            built->slaves.push_back({0, target.id, 0, 0, target.name.c_str(),
+                                     target.syncs.data(), target.entries.data(),
+                                     target.entries.size()});
+        }
+
+        const StaticSlaveConfig candidate{built->slaves.data(), built->slaves.size()};
+        if (!validateSlaveConfig(candidate, error)) {
+            return false;
+        }
+
+        impl_ = std::move(built);
+        return true;
+    } catch (const std::exception &exception) {
+        error = std::string("failed to build slave configuration: ") + exception.what();
+        return false;
+    }
 }
+
+StaticSlaveConfig LoadedSlaveConfig::view() noexcept {
+    return {impl_->slaves.data(), impl_->slaves.size()};
+}
+
+void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output) {
+    const std::ios::fmtflags saved_flags = output.flags();
+    const char saved_fill = output.fill();
+
+    for (std::size_t slave_index = 0; slave_index < config.impl_->slaves.size();
+         ++slave_index) {
+        const SlaveSpec &slave = config.impl_->slaves[slave_index];
+        const LoadedSlaveConfig::Impl::SlaveStorage &storage =
+            config.impl_->storage[slave_index];
+        output << "Slave " << slave.position << ": " << slave.name << '\n';
+        output << "  Identity: vendor=0x" << std::hex << std::nouppercase
+               << std::setfill('0') << std::setw(8) << slave.vendor_id
+               << " product=0x" << std::setw(8) << slave.product_code << '\n';
+
+        std::size_t entry_index = 0;
+        const auto print_pdos = [&](const std::vector<LoadedSlaveConfig::Impl::PdoStorage> &pdos,
+                                    const char *label,
+                                    unsigned int sync_index,
+                                    const char *direction) {
+            for (const LoadedSlaveConfig::Impl::PdoStorage &pdo : pdos) {
+                output << "  " << label << " 0x" << std::hex << std::setfill('0')
+                       << std::setw(4) << pdo.index << std::dec << std::setfill(' ')
+                       << " (SM" << sync_index << ", " << direction << ")\n";
+                for (std::size_t pdo_entry = 0; pdo_entry < pdo.entries.size(); ++pdo_entry) {
+                    const PdoEntrySpec &entry = slave.entries[entry_index++];
+                    output << "    0x" << std::hex << std::setfill('0') << std::setw(4)
+                           << entry.index << ':' << std::setw(2)
+                           << static_cast<unsigned int>(entry.sub_index)
+                           << std::dec << std::setfill(' ') << "  "
+                           << static_cast<unsigned int>(entry.bit_length)
+                           << " bit  offset=" << entry.offset << "  " << entry.name << '\n';
+                }
+            }
+        };
+
+        print_pdos(storage.rx_storage, "RxPDO", 2, "master -> slave");
+        print_pdos(storage.tx_storage, "TxPDO", 3, "slave -> master");
+    }
+
+    output.flags(saved_flags);
+    output.fill(saved_fill);
+}
+#endif
 
 bool applyDiscoveredIdentity(SlaveSpec &slave,
                              std::uint32_t vendor_id,

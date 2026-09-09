@@ -6,10 +6,12 @@ option(ROCOS_IGH_BUILD_HARDWARE_TESTS "Enable tests requiring EtherCAT hardware"
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Threads REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
+		src/pdo_config.cpp
 		src/slave_config.cpp
 		src/ethercat_master.cpp
 		src/cyclic_task.cpp
@@ -22,6 +24,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	target_compile_definitions(rocos_igh_core PUBLIC ROCOS_IGH_BUILD_MASTER=1)
 	target_link_libraries(rocos_igh_core PUBLIC
 		EtherCAT::EtherCAT
+		yaml-cpp
 		Threads::Threads
 		${CMAKE_DL_LIBS}
 	)
@@ -46,6 +49,17 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp)
+	target_include_directories(pdo_config_test PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	)
+	target_compile_definitions(pdo_config_test PRIVATE
+		ROCOS_IGH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+	)
+	target_compile_features(pdo_config_test PRIVATE cxx_std_17)
+	target_link_libraries(pdo_config_test PRIVATE yaml-cpp)
+	add_test(NAME pdo_config COMMAND pdo_config_test)
+
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
 	if(NOT ROCOS_IGH_BUILD_MASTER)
 		target_sources(shared_memory_config_test PRIVATE src/cyclic_task.cpp src/runtime_options.cpp)

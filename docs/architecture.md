@@ -14,9 +14,9 @@
 
 ## 2. 设计原则
 
-- **单一职责**：EtherCAT 生命周期、周期调度、静态从站配置和 IPC 各自独立。
+- **单一职责**：EtherCAT 生命周期、周期调度、YAML 配置解析、IgH 配置转换和 IPC 各自独立。
 - **每主站一个进程**：一个进程只请求一个 `master_id`，多主站通过启动多个进程实现。
-- **静态配置**：首版使用编译期 C++ 表描述从站和 PDO，不引入 JSON/YAML 解析。
+- **启动时配置**：使用 YAML 描述从站和 PDO，启动阶段一次性解析并转换为稳定的 IgH 指针视图。
 - **实时路径最小化**：激活前完成配置、分配和映射；周期线程不分配内存、不阻塞、不输出日志。
 - **保持 IPC 兼容**：复用 [shared_memory_config.hpp](../src/shared_memory_config.hpp) 的数据结构、接口和旧类型别名。
 
@@ -28,7 +28,7 @@ flowchart LR
 
     subgraph Process[rocos_igh_master 进程]
         Main[MasterApplication]
-        Config[StaticSlaveConfig]
+        Config[YAML / LoadedSlaveConfig]
         Master[EthercatMaster]
         Cycle[CyclicTask]
         IPC[SharedMemoryConfig]
@@ -58,25 +58,25 @@ flowchart LR
 
 进程入口和对象所有者：
 
-- 解析 `master_id` 和周期参数，周期默认 `1000 us`，不得小于 `1000 us`。
+- 解析必选配置路径、`master_id` 和周期参数，周期默认 `1000 us`，不得小于 `1000 us`。
 - 安装退出信号处理；信号处理函数只修改 `sig_atomic_t` 退出标志。
 - 按固定顺序初始化 EtherCAT、IPC 和实时线程。
 - 在退出时先停止周期线程，再释放 EtherCAT 和 IPC 资源。
 
 它不处理 PDO 内容，也不包含从站型号相关逻辑。
 
-### 4.2 `StaticSlaveConfig`
+### 4.2 PDO 配置
 
-编译期配置描述：
+`PdoBusConfig` 是硬件无关的 YAML 数据模型，`LoadedSlaveConfig` 持有转换后的
+IgH 数组并暴露 `StaticSlaveConfig` 指针视图：
 
-- 从站别名、总线位置、厂商 ID、产品码和名称。
-- Sync Manager、PDO 和 PDO Entry 映射。
+- YAML 中的从站 ID 决定总线位置，alias 固定为 0。
+- 每个从站分别配置 RxPDO、TxPDO 和 PDO Entry 映射。
 - 每个 PDO Entry 的方向、索引、子索引、位宽和共享内存名称。
 
-首版通过 C++ 静态数组提供配置。PDO 注册期间 IgH 会写入条目偏移；当
-`vendor_id/product_code` 同时为 0 时，初始化还会从扫描到的 SII 信息读取并
-写回实际身份。半零身份无效，动态身份发现仅支持 alias 0 的总线位置寻址。
-新增从站型号时增加一份静态配置，不修改周期调度逻辑。
+启动时使用 yaml-cpp 解析配置，固定生成 RxPDO/SM2 和 TxPDO/SM3。PDO 注册期间
+IgH 会写入条目偏移，vendor ID 和 product code 从扫描到的 SII 信息读取并写回。
+所有动态存储在进入周期循环前完成，周期调度逻辑不读取 YAML。
 
 ### 4.3 `EthercatMaster`
 
@@ -120,8 +120,8 @@ flowchart LR
 每个主站运行一个独立进程：
 
 ```text
-rocos_igh_master --master-id 0 --period-us 1000
-rocos_igh_master --master-id 1 --period-us 1000
+rocos_igh_master --config config/master0.yaml --master-id 0 --period-us 1000
+rocos_igh_master --config config/master1.yaml --master-id 1 --period-us 1000
 ```
 
 资源映射如下：
@@ -237,11 +237,13 @@ src/
   main.cpp                    # 参数、信号、实时设置、初始化与退出顺序
   ethercat_master.hpp/.cpp    # IgH 生命周期与周期 API
   cyclic_task.hpp/.cpp        # 绝对时间实时循环与统计
-  slave_config.hpp/.cpp       # 编译期从站/PDO 表、校验与元数据发布
+  pdo_config.hpp/.cpp         # YAML PDO 数据模型、解析与校验
+  slave_config.hpp/.cpp       # IgH 配置转换、格式化输出与元数据发布
   runtime_options.hpp/.cpp    # 严格命令行解析（无 EtherCAT 副作用）
   shared_memory_config.hpp    # IPC 与跨进程共享 ABI
 tests/
-  shared_memory_config_test.cpp  # 单一依赖无关测试可执行
+  pdo_config_test.cpp             # YAML 解析和格式校验
+  shared_memory_config_test.cpp  # IPC、IgH 配置视图和周期逻辑测试
 CMakeLists.txt
 cmake/
   FindEtherCAT.cmake
@@ -251,15 +253,16 @@ cmake/
 
 ## 11. CMake 目标
 
-已建立三个目标，由 `ROCOS_IGH_BUILD_MASTER` 选项切换两种模式：
+构建目标由 `ROCOS_IGH_BUILD_MASTER` 选项切换两种模式：
 
 | 目标 | 类型 | 用途 |
 |---|---|---|
 | `rocos_igh_core` | 静态库 / 接口库 | EtherCAT、周期任务和 IPC 实现（主站模式静态库，无硬件模式接口库） |
 | `rocos_igh_master` | 可执行程序 | 链接核心库并提供进程入口（仅主站模式） |
+| `pdo_config_test` | CTest 测试 | YAML 配置解析和校验 |
 | `shared_memory_config_test` | CTest 测试 | 无硬件 IPC 行为验证 |
 
-项目要求 C++17。CMake 必须查找 `ecrt.h`、`ethercat`、Threads 和 POSIX realtime 依赖，不硬编码安装路径。标准命令为：
+项目要求 C++17。CMake 必须查找 yaml-cpp、`ecrt.h`、`ethercat`、Threads 和 POSIX realtime 依赖，不硬编码安装路径。标准命令为：
 
 ```bash
 # 无硬件模式（无需 IgH 开发文件）
@@ -294,20 +297,20 @@ ctest --test-dir build-master --output-on-failure
 - 1 ms 条件下的周期统计和长时间运行稳定性。
 - 同时运行 master 0 和 master 1 时的数据与故障隔离。
 
-## 13. 首版范围
+## 13. 当前范围
 
-首版实现：
+当前实现：
 
 - 单进程单主站、多进程多主站。
-- 编译期从站和 PDO 配置。
+- 启动时 YAML 从站和 PDO 配置。
 - 两个 domain 的周期 PDO 收发。
 - 现有共享内存与信号量接口。
 - 最小周期统计、状态更新和有序退出。
 - CMake 构建及无硬件 IPC 测试。
 
-首版不实现：
+当前不实现：
 
-- 运行时配置文件和配置热加载。
+- 配置热加载。
 - SDO/SoE/FoE 管理接口。
 - Web、GUI、RPC 或数据库。
 - 主站间同步或统一管理进程。

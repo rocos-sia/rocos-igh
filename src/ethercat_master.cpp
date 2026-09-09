@@ -2,9 +2,6 @@
 
 #include "shared_memory_config.hpp"
 
-#include <iomanip>
-#include <iostream>
-
 namespace rocos {
 
 // Releases the requested IgH master and drops all borrowed pointers.
@@ -58,16 +55,6 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
         }
     }
 
-    for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
-        const SlaveSpec &slave = config.slaves[slave_index];
-        std::cout << "slave[" << slave_index << "] alias=" << slave.alias
-                  << " position=" << slave.position
-                  << " vendor_id=0x" << std::hex << std::setfill('0') << std::setw(8)
-                  << slave.vendor_id
-                  << " product_code=0x" << std::setw(8) << slave.product_code
-                  << std::dec << std::setfill(' ') << '\n';
-    }
-
     input_domain_ = ecrt_master_create_domain(master_);
     if (input_domain_ == nullptr) {
         error = "failed to create input domain";
@@ -98,27 +85,48 @@ bool EthercatMaster::initialize(unsigned int master_id, StaticSlaveConfig config
             return false;
         }
 
-        for (std::size_t entry_index = 0; entry_index < slave.entry_count; ++entry_index) {
-            PdoEntrySpec &entry = slave.entries[entry_index];
+        std::size_t entry_index = 0;
+        for (unsigned int sync_position = 0; sync_position < 2U; ++sync_position) {
+            const ec_sync_info_t &sync = slave.syncs[sync_position];
             ec_domain_t *domain =
-                (entry.direction == PdoDirection::Input) ? input_domain_ : output_domain_;
+                (sync.dir == EC_DIR_INPUT) ? input_domain_ : output_domain_;
+            for (unsigned int pdo_position = 0; pdo_position < sync.n_pdos;
+                 ++pdo_position) {
+                const ec_pdo_info_t &pdo = sync.pdos[pdo_position];
+                for (unsigned int pdo_entry_position = 0;
+                     pdo_entry_position < pdo.n_entries;
+                     ++pdo_entry_position) {
+                    if (entry_index >= slave.entry_count) {
+                        error = "PDO entry table does not match Sync Manager mapping";
+                        reset();
+                        return false;
+                    }
 
-            unsigned int bit_position = 0;
-            const int offset = ecrt_slave_config_reg_pdo_entry(
-                sc, entry.index, entry.sub_index, domain, &bit_position);
-            if (offset < 0) {
-                error = "failed to register PDO entry";
-                reset();
-                return false;
-            }
-            if (bit_position != 0U) {
-                error = "pdo entry is not byte-aligned";
-                reset();
-                return false;
-            }
+                    PdoEntrySpec &entry = slave.entries[entry_index++];
+                    unsigned int bit_position = 0;
+                    const int offset = ecrt_slave_config_reg_pdo_entry_pos(
+                        sc, sync.index, pdo_position, pdo_entry_position,
+                        domain, &bit_position);
+                    if (offset < 0) {
+                        error = "failed to register PDO entry";
+                        reset();
+                        return false;
+                    }
+                    if (bit_position != 0U) {
+                        error = "pdo entry is not byte-aligned";
+                        reset();
+                        return false;
+                    }
 
-            entry.offset = static_cast<unsigned int>(offset);
-            entry.bit_position = bit_position;
+                    entry.offset = static_cast<unsigned int>(offset);
+                    entry.bit_position = bit_position;
+                }
+            }
+        }
+        if (entry_index != slave.entry_count) {
+            error = "PDO entry table does not match Sync Manager mapping";
+            reset();
+            return false;
         }
     }
 

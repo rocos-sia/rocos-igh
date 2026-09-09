@@ -9,6 +9,9 @@
 
 Minimal C++ EtherCAT master shell built on IgH EtherCAT Master, with shared-memory IPC for client processes.
 
+The build requires yaml-cpp (`libyaml-cpp-dev` on Debian/Ubuntu). Master-enabled
+builds additionally require the IgH `ecrt.h` header and `libethercat` library.
+
 ## Build and test (hardware-free)
 
 Use this mode when IgH development files are not installed. It builds the IPC-focused library and tests.
@@ -33,18 +36,23 @@ ctest --test-dir build-master --output-on-failure
 
 The executable is `rocos_igh_master` and supports:
 
+- `--config <PDO YAML path>` (required)
 - `--master-id <non-negative integer>`
 - `--period-us <integer >= 1000>`
 - `--help`
 
-The checked-in configuration maps one drive at alias 0, ring position 0. It uses
-RxPDO `0x1600` on SM2 and TxPDO `0x1A00` on SM3 with the entries documented in
-[PDO configuration](docs/pdo-config.md).
+```bash
+./build-master/rocos_igh_master --config config/pdo.yaml --master-id 0 --period-us 1000
+```
 
-The drive identity is not fixed at compile time. Startup reads the vendor ID and
-product code from the scanned SII data, prints both values, and then passes the
-resolved identity to IgH for strict matching. Startup fails before creating IPC
-or applying realtime privileges when the slave at position 0 is unavailable.
+The YAML file lists slaves in physical bus order and configures each slave's
+RxPDO and TxPDO mappings. Alias is fixed to zero; slave IDs start at zero and
+also define ring positions. See the full [PDO configuration](docs/pdo-config.md)
+format specification and the checked-in [example](config/pdo.yaml).
+
+Slave identities are not configured in YAML. Startup reads each vendor ID and
+product code from SII, prints the resolved mapping, and passes the actual
+identity to IgH for strict matching.
 
 ## Additional docs
 
