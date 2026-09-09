@@ -1,0 +1,142 @@
+version: 1
+
+slaves:
+  - id: 0
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 1
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 2
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 3
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 4
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 5
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
+
+  - id: 6
+    name: Elmo Twitter Drive
+    rx_pdos:
+      - index: 0x1607
+        entries:
+          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}
+          - {name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8}
+          - {name: Target Position, index: 0x607A, sub_index: 0, bit_length: 32}
+          - {name: Target Velocity, index: 0x60FF, sub_index: 0, bit_length: 32}
+          - {name: Target Torque, index: 0x6071, sub_index: 0, bit_length: 16}
+
+    tx_pdos:
+      - index: 0x1A07
+        entries:
+          - {name: Status Word, index: 0x6061, sub_index: 0, bit_length: 16}
+          - {name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32}
+          - {name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32}
+          - {name: Torque Actual Value, index: 0x6077, sub_index: 0, bit_length: 16}
+          - {name: Load Torque Value, index: 0x20A0, sub_index: 0, bit_length: 32}
