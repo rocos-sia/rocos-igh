@@ -19,10 +19,22 @@ target_link_libraries(shm_web_server PRIVATE
     rt
 )
 
-# 把 index.html 复制到可执行文件旁，方便直接运行。
+# 把前端资源复制到可执行文件旁，方便直接运行。
+add_custom_target(shm_web_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
+        "$<TARGET_FILE_DIR:shm_web_server>/index.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/value_decoder.mjs"
+        "$<TARGET_FILE_DIR:shm_web_server>/value_decoder.mjs"
+    COMMENT "Copying frontend assets next to shm_web_server"
+)
+
 add_custom_command(TARGET shm_web_server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/index.html"
         "$<TARGET_FILE_DIR:shm_web_server>/index.html"
-    COMMENT "Copying index.html next to shm_web_server"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/value_decoder.mjs"
+        "$<TARGET_FILE_DIR:shm_web_server>/value_decoder.mjs"
 )

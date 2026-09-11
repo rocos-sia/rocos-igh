@@ -69,6 +69,11 @@
   th { color: var(--muted); font-size: 12px; font-weight: 500; background: var(--bg); position: sticky; top: 0; }
   td.mono { font-family: var(--mono); }
   td.bytes { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  select.data-type {
+    min-width: 88px; padding: 4px 24px 4px 8px; border: 1px solid var(--border);
+    border-radius: 4px; background: var(--panel2); color: var(--text);
+    font-family: var(--mono); font-size: 12px;
+  }
   .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; }
   .tag.in  { background: rgba(77,208,225,.15); color: var(--input); }
   .tag.out { background: rgba(255,183,77,.15); color: var(--output); }
@@ -121,23 +126,61 @@
   数据来源：<code>/dev/shm/ecm{master_id}</code> + <code>pd_input{master_id}</code> + <code>pd_output{master_id}</code> · 刷新间隔约 250 ms
 </footer>
 
-<script>
+<script type="module">
+import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
+
 (() => {
   const $ = id => document.getElementById(id);
   const fmt = n => (typeof n === 'number' && isFinite(n)) ? n.toLocaleString() : '—';
-  const hex2 = n => '0x' + n.toString(16).toUpperCase().padStart(2, '0');
+  const selectedTypes = new Map();
 
-  // 把字节序列渲染成可读的十六进制与（可能的）整数。
-  function renderBytes(bytes, size) {
-    const b = bytes.match(/../g) || [];
-    if (!b.length) return '-';
-    let hex = b.map(x => x.toUpperCase()).join(' ');
-    let val = '';
-    if (size === 1) val = parseInt(b[0], 16);
-    else if (size === 2) val = parseInt(b[1] + b[0], 16);           // 小端 u16
-    else if (size === 4) val = parseInt(b[3] + b[2] + b[1] + b[0], 16); // 小端 u32
-    const show = (val !== '') ? ` = ${val}` : '';
-    return `${hex}${show}`;
+  function renderTypeSelector(key, size) {
+    const types = typesForSize(size);
+    if (!types.length) return '<span class="meta">N/A</span>';
+    const selected = compatibleTypeForSize(size, selectedTypes.get(key));
+    const options = types.map(type =>
+      `<option value="${type}"${type === selected ? ' selected' : ''}>${type}</option>`
+    ).join('');
+    return `<select class="data-type" data-key="${key}" aria-label="数据类型">${options}</select>`;
+  }
+
+  function renderVariableValue(key, variable) {
+    const selected = compatibleTypeForSize(variable.size, selectedTypes.get(key));
+    return selected
+      ? formatTypedBytes(variable.bytes, selected)
+      : (variable.bytes.match(/../g) || []).map(byte => byte.toUpperCase()).join(' ') || '-';
+  }
+
+  function renderVariableRow(slaveId, direction, variable) {
+    const key = variableKey(slaveId, direction, variable);
+    const tagClass = direction === 'out' ? 'out' : 'in';
+    const tagText = direction.toUpperCase();
+    return `<tr data-key="${key}" data-bytes="${variable.bytes}">
+      <td><span class="tag ${tagClass}">${tagText}</span></td>
+      <td>${variable.name}</td>
+      <td class="mono">${variable.index}.${variable.sub_index}</td>
+      <td class="mono">${variable.offset}</td>
+      <td class="mono">${variable.size} B</td>
+      <td class="bytes">${renderVariableValue(key, variable)}</td>
+      <td>${renderTypeSelector(key, variable.size)}</td>
+    </tr>`;
+  }
+
+  function slaveSchema(bus) {
+    return JSON.stringify(bus.slaves.map(slave => ({
+      id: slave.id,
+      name: slave.name,
+      input: slave.input_vars.map(variable => [variableKey(slave.id, 'in', variable), variable.name, variable.size]),
+      output: slave.output_vars.map(variable => [variableKey(slave.id, 'out', variable), variable.name, variable.size]),
+    })));
+  }
+
+  function updateVariableRow(container, slaveId, direction, variable) {
+    const key = variableKey(slaveId, direction, variable);
+    const row = container.querySelector(`tr[data-key="${key}"]`);
+    if (!row) return;
+    row.dataset.bytes = variable.bytes;
+    row.querySelector('.bytes').textContent = renderVariableValue(key, variable);
   }
 
   function setText(id, txt) { $(id).textContent = txt; }
@@ -164,6 +207,15 @@
     const container = $('slaves');
     if (!bus.slave_num) {
       container.innerHTML = '<div class="empty">共享内存可达，但 0 个从站（可能是空配置）。</div>';
+      delete container.dataset.schema;
+      return;
+    }
+    const schema = slaveSchema(bus);
+    if (container.dataset.schema === schema) {
+      for (const slave of bus.slaves) {
+        for (const variable of slave.output_vars) updateVariableRow(container, slave.id, 'out', variable);
+        for (const variable of slave.input_vars) updateVariableRow(container, slave.id, 'in', variable);
+      }
       return;
     }
     let html = '';
@@ -174,31 +226,18 @@
           <span class="meta">输入 ${slave.input_var_num} · 输出 ${slave.output_var_num}</span>
         </div>
         <table>
-          <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th></tr></thead>
+          <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th><th>数据类型</th></tr></thead>
           <tbody>`;
       for (const v of slave.output_vars) {
-        html += `<tr>
-          <td><span class="tag out">OUT</span></td>
-          <td>${v.name}</td>
-          <td class="mono">${v.index}.${v.sub_index}</td>
-          <td class="mono">${v.offset}</td>
-          <td class="mono">${v.size} B</td>
-          <td class="bytes">${renderBytes(v.bytes, v.size)}</td>
-        </tr>`;
+        html += renderVariableRow(slave.id, 'out', v);
       }
       for (const v of slave.input_vars) {
-        html += `<tr>
-          <td><span class="tag in">IN</span></td>
-          <td>${v.name}</td>
-          <td class="mono">${v.index}.${v.sub_index}</td>
-          <td class="mono">${v.offset}</td>
-          <td class="mono">${v.size} B</td>
-          <td class="bytes">${renderBytes(v.bytes, v.size)}</td>
-        </tr>`;
+        html += renderVariableRow(slave.id, 'in', v);
       }
       html += '</tbody></table></div>';
     }
     container.innerHTML = html;
+    container.dataset.schema = schema;
   }
 
   function updateStatus(connected, demo, error) {
@@ -220,6 +259,7 @@
   function handle(snapshot) {
     if (!snapshot.available) {
       $('slaves').innerHTML = '<div class="empty">' + (snapshot.error || '共享内存不可用') + '</div>';
+      delete $('slaves').dataset.schema;
       updateStatus(false, snapshot.demo, snapshot.error);
       // 清空卡片。
       ['state','reqstate','auth','slavenum','dt','cur','min','max','avg','ts','mode','reset'].forEach(k => setText(k, '—'));
@@ -229,6 +269,14 @@
     renderBus(snapshot);
     renderSlaves(snapshot);
   }
+
+  $('slaves').addEventListener('change', event => {
+    const select = event.target.closest('select.data-type');
+    if (!select) return;
+    selectedTypes.set(select.dataset.key, select.value);
+    const row = select.closest('tr');
+    row.querySelector('.bytes').textContent = formatTypedBytes(row.dataset.bytes, select.value);
+  });
 
   // 优先用 SSE 实时流；不支持时退回定时轮询 /api/snapshot。
   const useSSE = ('EventSource' in window) && (window.EventSource !== undefined);

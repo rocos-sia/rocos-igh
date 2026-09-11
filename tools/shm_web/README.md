@@ -8,6 +8,7 @@
 
 - `shm_web_server.cpp` —— HTTP 后端：静态文件 + `/api/snapshot`（JSON 快照）+ `/api/events`（SSE 推送）。
 - `index.html` —— 前端单页：总线状态卡片、周期统计、每个从站的输入/输出 PDO 变量实时值。
+- `value_decoder.mjs` —— 小端 PDO 数据类型解析，供浏览器页面与 Node.js 测试复用。
 - `CMakeLists.txt` —— 构建脚本（独立于主工程，可单独编译）。
 
 ## 构建
@@ -65,7 +66,7 @@ sudo ./build-master/rocos_igh_master --master-id 0 --period-us 1000
 
 - `EcatBus`：总线状态（INIT/PREOP/SAFEOP/OP）、`dt` 控制周期、周期统计（min/max/avg/current，微秒）、时间戳、`is_authorized`、从站数。
 - `Slave`：每个从站的名称、输入/输出变量数。
-- `PdVar`：每个 PDO 变量的名称、`index.sub_index`、字节偏移、大小，以及从 PDO 缓冲区读出的实时字节（十六进制 + 小端整数）。
+- `PdVar`：每个 PDO 变量的名称、`index.sub_index`、字节偏移、大小，以及从 PDO 缓冲区读出的实时字节。数据类型菜单按变量宽度提供 `UINT8`/`INT8`、`UINT16`/`INT16` 或 `UINT32`/`INT32`/`FLOAT`，并以所选类型进行小端解析。
 
 ## 数据流
 

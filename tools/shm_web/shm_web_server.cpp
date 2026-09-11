@@ -411,11 +411,11 @@ std::string response(int status, const std::string &status_text,
     return o.str();
 }
 
-bool loadIndexHtml(std::string &out, const std::string &argv0) {
+bool loadFrontendAsset(const std::string &filename, std::string &out, const std::string &argv0) {
     std::string dir;
     const auto slash = argv0.find_last_of('/');
     dir = (slash == std::string::npos) ? std::string(".") : argv0.substr(0, slash);
-    const std::vector<std::string> candidates = { dir + "/index.html", "./index.html", "index.html" };
+    const std::vector<std::string> candidates = { dir + "/" + filename, "./" + filename, filename };
     for (const auto &path : candidates) {
         std::ifstream f(path, std::ios::binary);
         if (f.good()) {
@@ -459,12 +459,22 @@ void handleConnection(int fd, AppState &st, const std::string &argv0) {
 
     if (path == "/" || path == "/index.html") {
         std::string html;
-        if (loadIndexHtml(html, argv0)) {
+        if (loadFrontendAsset("index.html", html, argv0)) {
             const std::string r = response(200, "OK", "text/html; charset=utf-8", html);
             ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
         } else {
             const std::string r = response(200, "OK", "text/html; charset=utf-8",
                 "<h1>index.html not found</h1><p>Place index.html next to the executable or in the current directory.</p>");
+            ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
+        }
+        close(fd);
+    } else if (path == "/value_decoder.mjs") {
+        std::string script;
+        if (loadFrontendAsset("value_decoder.mjs", script, argv0)) {
+            const std::string r = response(200, "OK", "text/javascript; charset=utf-8", script);
+            ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
+        } else {
+            const std::string r = response(404, "Not Found", "text/plain; charset=utf-8", "not found\n");
             ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
         }
         close(fd);
