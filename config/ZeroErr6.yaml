@@ -1,0 +1,159 @@
+version: 1
+
+slaves:
+  - id: 0
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+      reference: true
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+
+  - id: 1
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+
+  - id: 2
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+
+  - id: 3
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+
+  - id: 4
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+
+  - id: 5
+    name: ZeroErr Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Target Position,   index: 0x607A, sub_index: 0, bit_length: 32 }
+          - { name: Target Velocity,   index: 0x60FF, sub_index: 0, bit_length: 32 }
+          - { name: Target Torque,     index: 0x6071, sub_index: 0, bit_length: 16 }
+          - { name: Digital Outputs,   index: 0x60FE, sub_index: 0, bit_length: 32 }
+          - { name: Control Word,      index: 0x6040, sub_index: 0, bit_length: 16 }
+          - { name: Mode of Operation, index: 0x6060, sub_index: 0, bit_length: 8  }
+          - { name: None,              index: 0x0000, sub_index: 0, bit_length: 8  }
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: Position Actual Value, index: 0x6064, sub_index: 0, bit_length: 32 }
+          - { name: Velocity Actual Value, index: 0x606C, sub_index: 0, bit_length: 32 }
+          - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
+          - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
+          - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
