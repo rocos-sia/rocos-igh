@@ -98,6 +98,13 @@ bool EthercatMaster::initialize(unsigned int master_id,
             reset();
             return false;
         }
+        // Verify the identity was actually written before passing it to IgH.
+        if (slave.vendor_id == 0 || slave.product_code == 0) {
+            error = "SII identity for slave[" + std::to_string(slave_index) +
+                    "] is still zero after discovery";
+            reset();
+            return false;
+        }
     }
 
     input_domain_ = ecrt_master_create_domain(master_);
@@ -146,8 +153,21 @@ bool EthercatMaster::initialize(unsigned int master_id,
         }
 
         std::size_t entry_index = 0;
-        for (unsigned int sync_position = 0; sync_position < 2U; ++sync_position) {
+        for (unsigned int sync_position = 0;
+             slave.syncs[sync_position].index != 0xffU; ++sync_position) {
             const ec_sync_info_t &sync = slave.syncs[sync_position];
+            // Only SM2 (RxPDO, master→slave) and SM3 (TxPDO, slave→master) carry
+            // process data; skip any other sync managers silently.
+            if (sync.index != 2U && sync.index != 3U) {
+                continue;
+            }
+            if ((sync.index == 2U) != (sync.dir == EC_DIR_OUTPUT)) {
+                error = "slave[" + std::to_string(slave_index) +
+                        "] sync manager " + std::to_string(sync.index) +
+                        " direction does not match expected RxPDO/TxPDO assignment";
+                reset();
+                return false;
+            }
             ec_domain_t *domain =
                 (sync.dir == EC_DIR_INPUT) ? input_domain_ : output_domain_;
             for (unsigned int pdo_position = 0; pdo_position < sync.n_pdos;
@@ -379,7 +399,7 @@ bool EthercatMaster::setApplicationTime(std::uint64_t app_time_ns) noexcept {
 // Re-queues both domains, queues optional DC sync datagrams, and sends (rt_safe).
 bool EthercatMaster::queueAndSend() noexcept {
     if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
-        return true;
+        return false;
     }
 
     (void)ecrt_domain_queue(input_domain_);

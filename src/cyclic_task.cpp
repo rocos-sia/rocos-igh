@@ -133,6 +133,9 @@ void updateSharedBus(const BusState &state,
     if (bus.resetCycleTime) {
         resetTimingStatistics(statistics);
         bus.resetCycleTime = false;
+        // Discard the stale measurement taken before the reset; the next cycle
+        // will seed fresh min/max/avg from its own duration.
+        return;
     }
 
     accountCycleDuration(statistics, current_cycle_us);
@@ -188,8 +191,11 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         if (clock_gettime(CLOCK_MONOTONIC, &wake_time) != 0) {
             return errno;
         }
+        // DC application time must be the nominal cycle deadline, not the actual
+        // wake instant. Using the wake instant injects jitter directly into the
+        // distributed-clock synchronisation error.
         if (!master_.setApplicationTime(
-                static_cast<std::uint64_t>(toNanoseconds(wake_time)))) {
+                static_cast<std::uint64_t>(toNanoseconds(deadline)))) {
             return EIO;
         }
 

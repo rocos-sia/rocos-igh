@@ -10,20 +10,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 存在两种构建模式，由 `ROCOS_IGH_BUILD_MASTER` 选项控制（默认 ON）。
 
-无硬件模式（不依赖 IgH 开发文件，仅构建 IPC 库与测试）：
+主站模式（默认，需要 `ecrt.h` 与 `libethercat`）：
 
 ```bash
-cmake -S . -B build -DROCOS_IGH_BUILD_MASTER=OFF
+cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-主站模式（需要 `ecrt.h` 与 `libethercat`）：
+无硬件模式（不依赖 IgH 开发文件，仅构建 IPC 库与测试）：
 
 ```bash
-cmake -S . -B build-master -DROCOS_IGH_BUILD_MASTER=ON
-cmake --build build-master
-ctest --test-dir build-master --output-on-failure
+cmake -S . -B build-nomaster -DROCOS_IGH_BUILD_MASTER=OFF
+cmake --build build-nomaster
+ctest --test-dir build-nomaster --output-on-failure
 ```
 
 只运行单个测试：
@@ -35,7 +35,7 @@ ctest --test-dir build -R shared_memory_config --output-on-failure
 运行主站可执行：
 
 ```bash
-./build-master/rocos_igh_master --config config/pdo.yaml --master-id 0 --period-us 1000
+./build/rocos_igh_master --config config/pdo.yaml --master-id 0 --period-us 1000
 ```
 
 ## 架构

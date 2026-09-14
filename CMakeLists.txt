@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(rocos_igh VERSION 0.1.0 LANGUAGES CXX)
 
-option(ROCOS_IGH_BUILD_MASTER "Build the IgH master executable" ON)
+option(ROCOS_IGH_BUILD_MASTER "Build the IgH master executable" ON)  # default ON: requires ecrt.h and libethercat
 option(ROCOS_IGH_BUILD_HARDWARE_TESTS "Enable tests requiring EtherCAT hardware" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
