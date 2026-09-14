@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+const cmake = readFileSync(new URL('./CMakeLists.txt', import.meta.url), 'utf8');
+const server = readFileSync(new URL('./shm_web_server.cpp', import.meta.url), 'utf8');
 const runtimeIds = [
   'dot', 'statustext', 'masterid', 'state', 'reqstate', 'auth', 'slavenum',
   'dt', 'cur', 'min', 'max', 'avg', 'ts', 'mode', 'reset', 'slaves',
@@ -29,7 +31,17 @@ test('provides responsive and keyboard-focus styling', () => {
 
 test('uses the snapshot master ID and a modern Chinese UI font', () => {
   assert.match(html, /setText\(['"]masterid['"],\s*snapshot\.master_id/);
-  assert.match(html, /--ui:[^;]*["']Noto Sans CJK SC["']/);
+  assert.match(html, /font-family:\s*["']Alibaba PuHuiTi["']/);
+  assert.match(html, /--ui:[^;]*["']Alibaba PuHuiTi["']/);
+  assert.match(html, /url\(["']\.\/AlibabaPuHuiTi-3-55-Regular\.woff2["']\)/);
+  assert.equal(
+    existsSync(new URL('./AlibabaPuHuiTi-3-55-Regular.woff2', import.meta.url)),
+    true,
+    'expected the Alibaba PuHuiTi webfont asset',
+  );
+  assert.match(cmake, /AlibabaPuHuiTi-3-55-Regular\.woff2/);
+  assert.match(server, /\/AlibabaPuHuiTi-3-55-Regular\.woff2/);
+  assert.match(server, /font\/woff2/);
 });
 
 test('declares a light interface color scheme', () => {

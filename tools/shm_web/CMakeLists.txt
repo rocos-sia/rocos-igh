@@ -27,6 +27,9 @@ add_custom_target(shm_web_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/value_decoder.mjs"
         "$<TARGET_FILE_DIR:shm_web_server>/value_decoder.mjs"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/AlibabaPuHuiTi-3-55-Regular.woff2"
+        "$<TARGET_FILE_DIR:shm_web_server>/AlibabaPuHuiTi-3-55-Regular.woff2"
     COMMENT "Copying frontend assets next to shm_web_server"
 )
 
@@ -37,4 +40,7 @@ add_custom_command(TARGET shm_web_server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/value_decoder.mjs"
         "$<TARGET_FILE_DIR:shm_web_server>/value_decoder.mjs"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/AlibabaPuHuiTi-3-55-Regular.woff2"
+        "$<TARGET_FILE_DIR:shm_web_server>/AlibabaPuHuiTi-3-55-Regular.woff2"
 )

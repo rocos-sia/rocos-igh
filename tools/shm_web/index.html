@@ -12,6 +12,13 @@
   } catch (_) {}
 </script>
 <style>
+  @font-face {
+    font-family: "Alibaba PuHuiTi";
+    src: url("./AlibabaPuHuiTi-3-55-Regular.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+  }
   :root {
     color-scheme: light;
     --bg: #edf0f3;
@@ -42,7 +49,7 @@
     --input-border: rgba(8,127,145,.24);
     --output-bg: rgba(173,98,0,.08);
     --output-border: rgba(173,98,0,.24);
-    --ui: "Noto Sans CJK SC", "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --ui: "Alibaba PuHuiTi", "Noto Sans CJK SC", "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
     --mono: "Noto Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
   :root[data-theme="dark"] {
