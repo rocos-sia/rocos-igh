@@ -309,8 +309,8 @@ slaves:
     CHECK(config.slaves[0].dc->sync1_cycle_ns == 0U);
     CHECK(config.slaves[0].dc->sync1_shift_ns == 0);
     CHECK(config.slaves[0].dc->reference);
-    CHECK(config.slaves[0].rx_pdos[0].entries.size() == 3U);
-    CHECK(config.slaves[0].tx_pdos[0].entries.size() == 3U);
+    CHECK(config.slaves[0].rx_pdos[0].entries.size() == 7U);
+    CHECK(config.slaves[0].tx_pdos[0].entries.size() == 5U);
     return true;
   }
 
