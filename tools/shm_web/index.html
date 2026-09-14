@@ -1,130 +1,309 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rocos_igh 共享内存观察器</title>
+<script>
+  try {
+    if (localStorage.getItem('rocos-igh-theme') === 'dark') {
+      document.documentElement.dataset.theme = 'dark';
+    }
+  } catch (_) {}
+</script>
 <style>
   :root {
-    --bg: #0f1620;
-    --panel: #182230;
-    --panel2: #1f2c3c;
-    --border: #2a3a4d;
-    --text: #d8e2ec;
-    --muted: #8aa0b4;
-    --accent: #4fc3f7;
-    --ok: #4caf50;
-    --warn: #ffb74d;
-    --bad: #ef5350;
-    --input: #4dd0e1;
-    --output: #ffb74d;
-    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    color-scheme: light;
+    --bg: #edf0f3;
+    --panel: #ffffff;
+    --panel-raised: #f7f8fa;
+    --panel-deep: #eef1f4;
+    --border: #d5dae0;
+    --border-strong: #b8c1cb;
+    --text: #20272f;
+    --muted: #626e7a;
+    --faint: #89939e;
+    --accent: #087ff5;
+    --accent-hover: #006bd6;
+    --ok: #168a4f;
+    --warn: #ad6800;
+    --bad: #d83b3b;
+    --input: #087f91;
+    --output: #ad6200;
+    --grid-line: rgba(50,65,80,.04);
+    --code-text: #1769aa;
+    --value-text: #0969b8;
+    --shadow-lg: rgba(31,42,55,.08);
+    --shadow-md: rgba(31,42,55,.06);
+    --live-ring: rgba(22,138,79,.12);
+    --row-hover: rgba(8,127,245,.06);
+    --focus-ring: rgba(8,127,245,.24);
+    --input-bg: rgba(8,127,145,.08);
+    --input-border: rgba(8,127,145,.24);
+    --output-bg: rgba(173,98,0,.08);
+    --output-border: rgba(173,98,0,.24);
+    --ui: "Noto Sans CJK SC", "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --mono: "Noto Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1b1e22;
+    --panel: #24282d;
+    --panel-raised: #2a2f35;
+    --panel-deep: #202328;
+    --border: #383e46;
+    --border-strong: #4a535e;
+    --text: #eef2f6;
+    --muted: #a1aab5;
+    --faint: #737d88;
+    --accent: #168cff;
+    --accent-hover: #42a5ff;
+    --ok: #45c77a;
+    --warn: #f3b64c;
+    --bad: #f26666;
+    --input: #40d3e3;
+    --output: #f0a84a;
+    --grid-line: rgba(255,255,255,.018);
+    --code-text: #c9e4ff;
+    --value-text: #8cc9ff;
+    --shadow-lg: rgba(0,0,0,.18);
+    --shadow-md: rgba(0,0,0,.12);
+    --live-ring: rgba(69,199,122,.12);
+    --row-hover: rgba(22,140,255,.07);
+    --focus-ring: rgba(22,140,255,.35);
+    --input-bg: rgba(64,211,227,.11);
+    --input-border: rgba(64,211,227,.28);
+    --output-bg: rgba(240,168,74,.11);
+    --output-border: rgba(240,168,74,.28);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 20px;
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-width: 320px; min-height: 100vh; margin: 0;
+    color: var(--text); background-color: var(--bg);
+    background-image:
+      repeating-linear-gradient(0deg, transparent 0, transparent 31px, var(--grid-line) 31px, var(--grid-line) 32px),
+      repeating-linear-gradient(90deg, transparent 0, transparent 31px, var(--grid-line) 31px, var(--grid-line) 32px);
+    font-family: var(--ui); font-feature-settings: "kern", "tnum"; letter-spacing: 0;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
-  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
-  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
-  .sub code { background: var(--panel2); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-
+  .page-shell { width: min(100%, 1640px); margin: 0 auto; padding: 18px; }
+  .workbench-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    min-height: 68px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px 6px 0 0;
+    box-shadow: 0 10px 26px var(--shadow-lg);
+  }
+  .product-lockup, .toolbar-status, .status-bar { display: flex; align-items: center; }
+  .product-lockup { min-width: 0; gap: 12px; }
+  .product-mark {
+    display: grid; place-items: center; flex: 0 0 38px; height: 38px;
+    color: #fff; background: var(--accent); border-radius: 4px;
+    font: 700 13px/1 var(--mono);
+  }
+  h1 { margin: 0; font-size: 17px; line-height: 1.25; font-weight: 600; }
+  .sub { margin-top: 4px; color: var(--muted); font: 11px/1.35 var(--mono); }
+  .sub code { color: var(--code-text); }
+  .toolbar-status { justify-content: flex-end; gap: 14px; }
   .status-bar {
-    display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
-    padding: 8px 12px; border-radius: 8px; font-size: 13px;
-    background: var(--panel); border: 1px solid var(--border);
+    gap: 9px; padding: 7px 10px; color: var(--text);
+    background: var(--panel-deep); border: 1px solid var(--border); border-radius: 4px;
+    font-size: 12px;
   }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
-  .dot.live { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .refresh-note { color: var(--faint); font: 10px/1 var(--mono); white-space: nowrap; }
+  .theme-toggle {
+    display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0;
+    color: #fff; background: var(--accent); border: 1px solid var(--accent); border-radius: 4px;
+    font: 700 17px/1 var(--ui); cursor: pointer;
+  }
+  .theme-toggle:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .theme-icon { transform: translateY(-1px); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--ok); box-shadow: 0 0 0 3px var(--live-ring); }
   .dot.waiting { background: var(--warn); }
   .dot.offline { background: var(--bad); }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  .metrics-strip {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
+    margin-bottom: 18px; background: var(--border);
+    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 6px 6px; overflow: hidden;
+    box-shadow: 0 10px 26px var(--shadow-md);
   }
-  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
-  .kv { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0; }
-  .kv .k { color: var(--muted); font-size: 13px; }
-  .kv .v { font-family: var(--mono); font-size: 15px; }
+  .metric-group { min-width: 0; padding: 14px 16px; background: var(--panel-raised); }
+  .metric-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+  .metric-head h2 { margin: 0; font-size: 12px; font-weight: 600; }
+  .metric-code { color: var(--faint); font: 10px/1 var(--mono); }
+  .kv { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin: 7px 0; }
+  .kv .k { color: var(--muted); font-size: 12px; }
+  .kv .v { overflow-wrap: anywhere; text-align: right; font: 600 13px/1.3 var(--mono); }
   .state-badge {
-    display: inline-block; padding: 2px 10px; border-radius: 6px; font-family: var(--mono);
-    font-size: 13px; font-weight: 600; background: var(--panel2); border: 1px solid var(--border);
+    display: inline-block; min-width: 62px; padding: 3px 8px; border-radius: 3px;
+    background: var(--panel-deep); border: 1px solid var(--border-strong);
+    text-align: center; font: 700 11px/1.2 var(--mono);
   }
   .state-OP { color: var(--ok); border-color: var(--ok); }
   .state-SAFEOP { color: var(--warn); border-color: var(--warn); }
   .state-INIT, .state-PREOP, .state-BOOTSTRAP { color: var(--muted); }
 
-  .slave-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .workspace-title {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 20px;
+    margin: 22px 2px 10px;
+  }
+  .eyebrow { display: block; margin-bottom: 4px; color: var(--accent); font: 700 10px/1 var(--mono); }
+  .workspace-title h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .legend { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 11px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
+  .legend-item.in { color: var(--input); }
+  .legend-item.out { color: var(--output); }
+
+  .slave-box {
+    margin-bottom: 12px; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 7px 18px var(--shadow-md);
+  }
   .slave-head {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 12px 16px; background: var(--panel2); border-bottom: 1px solid var(--border);
+    min-height: 44px; padding: 10px 14px;
+    background: var(--panel-raised); border-bottom: 1px solid var(--border);
   }
-  .slave-head .name { font-weight: 600; font-size: 14px; }
-  .slave-head .meta { color: var(--muted); font-size: 12px; }
+  .slave-head .name { font: 600 13px/1.3 var(--ui); }
+  .slave-head .name::before { content: "NODE "; color: var(--accent); font: 700 10px/1 var(--mono); }
+  .slave-head .meta { color: var(--muted); font: 11px/1 var(--mono); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-size: 12px; font-weight: 500; background: var(--bg); position: sticky; top: 0; }
-  td.mono { font-family: var(--mono); }
-  td.bytes { font-family: var(--mono); font-size: 12px; color: var(--accent); }
-  select.data-type {
-    min-width: 88px; padding: 4px 24px 4px 8px; border: 1px solid var(--border);
-    border-radius: 4px; background: var(--panel2); color: var(--text);
-    font-family: var(--mono); font-size: 12px;
+  .table-scroll { width: 100%; overflow-x: auto; scrollbar-color: var(--border-strong) var(--panel-deep); }
+  table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+  th, td { overflow: hidden; padding: 9px 12px; border-bottom: 1px solid var(--border); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+  th {
+    position: sticky; top: 0; z-index: 1; color: var(--muted);
+    background: var(--panel-deep); font: 600 10px/1.2 var(--mono); text-transform: uppercase;
   }
-  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; }
-  .tag.in  { background: rgba(77,208,225,.15); color: var(--input); }
-  .tag.out { background: rgba(255,183,77,.15); color: var(--output); }
+  th:nth-child(1) { width: 72px; }
+  th:nth-child(2) { width: 24%; }
+  th:nth-child(3) { width: 116px; }
+  th:nth-child(4), th:nth-child(5) { width: 78px; }
+  th:nth-child(7) { width: 120px; }
+  tbody tr { transition: background-color 120ms ease; }
+  tbody tr:hover { background: var(--row-hover); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.mono { font-family: var(--mono); }
+  td.bytes { color: var(--value-text); font: 600 12px/1.2 var(--mono); }
+  select.data-type {
+    width: 100%; min-width: 92px; min-height: 28px; padding: 4px 7px;
+    color: #fff; background: var(--accent); border: 1px solid var(--accent); border-radius: 4px;
+    font: 600 11px/1 var(--mono); cursor: pointer;
+  }
+  select.data-type:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  select.data-type:focus-visible {
+    outline: 2px solid #fff; outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--focus-ring);
+  }
+  .tag { display: inline-block; min-width: 38px; padding: 2px 5px; border-radius: 3px; text-align: center; font: 700 10px/1.2 var(--mono); }
+  .tag.in  { color: var(--input); background: var(--input-bg); border: 1px solid var(--input-border); }
+  .tag.out { color: var(--output); background: var(--output-bg); border: 1px solid var(--output-border); }
   tr.hint td { color: var(--muted); font-style: italic; text-align: center; }
 
-  .empty { color: var(--muted); text-align: center; padding: 30px; font-size: 14px; }
+  .empty {
+    padding: 44px 20px; color: var(--muted); background: var(--panel);
+    border: 1px dashed var(--border-strong); border-radius: 6px; text-align: center; font-size: 13px;
+  }
 
-  footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
-  footer code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+  footer { margin: 18px 2px 4px; color: var(--faint); font: 10px/1.5 var(--mono); }
+  footer code { color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .page-shell { padding: 10px; }
+    .workbench-bar, .toolbar-status { align-items: flex-start; }
+    .workbench-bar { flex-direction: column; gap: 12px; }
+    .toolbar-status { width: 100%; justify-content: space-between; }
+    .metrics-strip { grid-template-columns: 1fr; }
+    .workspace-title { align-items: flex-start; flex-direction: column; gap: 10px; }
+  }
+
+  @media (max-width: 520px) {
+    .page-shell { padding: 0; }
+    .workbench-bar, .metrics-strip, .slave-box, .empty { border-right: 0; border-left: 0; border-radius: 0; }
+    .workbench-bar { padding: 12px; }
+    .product-mark { flex-basis: 34px; height: 34px; }
+    .sub { overflow-wrap: anywhere; }
+    .toolbar-status { align-items: center; }
+    .refresh-note { display: none; }
+    .metric-group { padding: 13px 12px; }
+    .workspace-title { margin-right: 12px; margin-left: 12px; }
+    .slave-head { align-items: flex-start; gap: 8px; }
+    .slave-head .meta { text-align: right; }
+    footer { margin-right: 12px; margin-left: 12px; }
+  }
 </style>
 </head>
 <body>
-<h1>rocos_igh 共享内存观察器</h1>
-<div class="sub">观察 <code>ecm{id}</code> / <code>pd_input{id}</code> / <code>pd_output{id}</code> 实时数据</div>
+<div class="page-shell">
+  <header class="workbench-bar">
+    <div class="product-lockup">
+      <span class="product-mark" aria-hidden="true">EC</span>
+      <div>
+        <h1>rocos_igh 共享内存观察器</h1>
+        <div class="sub">MASTER / <code id="masterid">—</code> · ECM / <code>ecm{id}</code> · RX / <code>pd_input{id}</code> · TX / <code>pd_output{id}</code></div>
+      </div>
+    </div>
+    <div class="toolbar-status">
+      <div class="status-bar" role="status" aria-live="polite">
+        <span class="dot" id="dot"></span>
+        <span id="statustext">连接中…</span>
+      </div>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换为深色主题" aria-pressed="false" title="切换为深色主题">
+        <span class="theme-icon" aria-hidden="true">☾</span>
+      </button>
+      <span class="refresh-note">LIVE FEED / 250 MS</span>
+    </div>
+  </header>
 
-<div class="status-bar">
-  <span class="dot" id="dot"></span>
-  <span id="statustext">连接中…</span>
+  <main>
+    <section class="metrics-strip" aria-label="主站运行指标">
+      <article class="metric-group">
+        <div class="metric-head"><h2>总线状态</h2><span class="metric-code">BUS / STATE</span></div>
+        <div class="kv"><span class="k">当前状态</span><span class="v"><span class="state-badge" id="state">—</span></span></div>
+        <div class="kv"><span class="k">请求状态</span><span class="v" id="reqstate">—</span></div>
+        <div class="kv"><span class="k">已授权</span><span class="v" id="auth">—</span></div>
+        <div class="kv"><span class="k">从站数</span><span class="v" id="slavenum">—</span></div>
+      </article>
+      <article class="metric-group">
+        <div class="metric-head"><h2>控制周期</h2><span class="metric-code">CYCLE / μs</span></div>
+        <div class="kv"><span class="k">目标周期</span><span class="v" id="dt">—</span></div>
+        <div class="kv"><span class="k">当前</span><span class="v" id="cur">—</span></div>
+        <div class="kv"><span class="k">最小</span><span class="v" id="min">—</span></div>
+        <div class="kv"><span class="k">最大</span><span class="v" id="max">—</span></div>
+        <div class="kv"><span class="k">平均</span><span class="v" id="avg">—</span></div>
+      </article>
+      <article class="metric-group">
+        <div class="metric-head"><h2>运行信息</h2><span class="metric-code">RUNTIME / META</span></div>
+        <div class="kv"><span class="k">时间戳 (μs)</span><span class="v" id="ts">—</span></div>
+        <div class="kv"><span class="k">运行模式</span><span class="v" id="mode">—</span></div>
+        <div class="kv"><span class="k">重启统计</span><span class="v" id="reset">—</span></div>
+      </article>
+    </section>
+
+    <section aria-labelledby="pdo-title">
+      <div class="workspace-title">
+        <div><span class="eyebrow">PROCESS DATA OBJECTS</span><h2 id="pdo-title">从站实时数据</h2></div>
+        <div class="legend" aria-label="数据方向图例">
+          <span class="legend-item in"><span class="legend-swatch"></span>INPUT</span>
+          <span class="legend-item out"><span class="legend-swatch"></span>OUTPUT</span>
+        </div>
+      </div>
+      <div id="slaves">
+        <div class="empty" id="loading">等待共享内存数据…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    SOURCE / <code>/dev/shm/ecm{master_id}</code> + <code>pd_input{master_id}</code> + <code>pd_output{master_id}</code> · REFRESH / 250 ms
+  </footer>
 </div>
-
-<div class="grid">
-  <div class="card">
-    <h2>总线状态</h2>
-    <div class="kv"><span class="k">当前状态</span><span class="v"><span class="state-badge" id="state">—</span></span></div>
-    <div class="kv"><span class="k">请求状态</span><span class="v" id="reqstate">—</span></div>
-    <div class="kv"><span class="k">已授权</span><span class="v" id="auth">—</span></div>
-    <div class="kv"><span class="k">从站数</span><span class="v" id="slavenum">—</span></div>
-  </div>
-  <div class="card">
-    <h2>控制周期</h2>
-    <div class="kv"><span class="k">dt (μs)</span><span class="v" id="dt">—</span></div>
-    <div class="kv"><span class="k">当前 (μs)</span><span class="v" id="cur">—</span></div>
-    <div class="kv"><span class="k">最小 (μs)</span><span class="v" id="min">—</span></div>
-    <div class="kv"><span class="k">最大 (μs)</span><span class="v" id="max">—</span></div>
-    <div class="kv"><span class="k">平均 (μs)</span><span class="v" id="avg">—</span></div>
-  </div>
-  <div class="card">
-    <h2>时间戳</h2>
-    <div class="kv"><span class="k">timestamp (μs)</span><span class="v" id="ts">—</span></div>
-    <div class="kv"><span class="k">模式</span><span class="v" id="mode">—</span></div>
-    <div class="kv"><span class="k">重启统计</span><span class="v" id="reset">—</span></div>
-  </div>
-</div>
-
-<div id="slaves">
-  <div class="empty" id="loading">等待共享内存数据…</div>
-</div>
-
-<footer>
-  数据来源：<code>/dev/shm/ecm{master_id}</code> + <code>pd_input{master_id}</code> + <code>pd_output{master_id}</code> · 刷新间隔约 250 ms
-</footer>
 
 <script type="module">
 import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
@@ -133,6 +312,24 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
   const $ = id => document.getElementById(id);
   const fmt = n => (typeof n === 'number' && isFinite(n)) ? n.toLocaleString() : '—';
   const selectedTypes = new Map();
+
+  function applyTheme(theme) {
+    const dark = theme === 'dark';
+    const button = $('theme-toggle');
+    const label = dark ? '切换为浅色主题' : '切换为深色主题';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', String(dark));
+    button.title = label;
+    button.querySelector('.theme-icon').textContent = dark ? '☀' : '☾';
+  }
+
+  applyTheme(document.documentElement.dataset.theme);
+  $('theme-toggle').addEventListener('click', () => {
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(theme);
+    try { localStorage.setItem('rocos-igh-theme', theme); } catch (_) {}
+  });
 
   function renderTypeSelector(key, size) {
     const types = typesForSize(size);
@@ -225,16 +422,17 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
           <span class="name">#${slave.id} ${slave.name}</span>
           <span class="meta">输入 ${slave.input_var_num} · 输出 ${slave.output_var_num}</span>
         </div>
-        <table>
-          <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th><th>数据类型</th></tr></thead>
-          <tbody>`;
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th><th>数据类型</th></tr></thead>
+            <tbody>`;
       for (const v of slave.output_vars) {
         html += renderVariableRow(slave.id, 'out', v);
       }
       for (const v of slave.input_vars) {
         html += renderVariableRow(slave.id, 'in', v);
       }
-      html += '</tbody></table></div>';
+      html += '</tbody></table></div></div>';
     }
     container.innerHTML = html;
     container.dataset.schema = schema;
@@ -257,6 +455,7 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
   }
 
   function handle(snapshot) {
+    setText('masterid', snapshot.master_id ?? '—');
     if (!snapshot.available) {
       $('slaves').innerHTML = '<div class="empty">' + (snapshot.error || '共享内存不可用') + '</div>';
       delete $('slaves').dataset.schema;
