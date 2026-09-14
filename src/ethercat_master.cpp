@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <ctime>
+#include <iostream>
 #include <thread>
 
 namespace rocos {
@@ -13,6 +14,16 @@ namespace {
 
 constexpr auto kPreopPollInterval = std::chrono::milliseconds(10);
 constexpr std::size_t kPreopMaxAttempts = 500U;
+
+const char *alStateName(std::uint8_t al_state) noexcept {
+    switch (al_state) {
+    case EC_AL_STATE_INIT:   return "INIT";
+    case EC_AL_STATE_PREOP:  return "PREOP";
+    case EC_AL_STATE_SAFEOP: return "SAFEOP";
+    case EC_AL_STATE_OP:     return "OP";
+    default:                 return "UNKNOWN";
+    }
+}
 
 }  // namespace
 
@@ -75,6 +86,20 @@ bool EthercatMaster::initialize(unsigned int master_id,
 
     // IgH requests PREOP asynchronously when the master is reserved. Activating
     // while a slave is still OP can overwrite that request and skip reconfiguration.
+    // Print current state of every slave before the wait loop so any non-PREOP
+    // slaves are visible in the log from the start.
+    for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
+        ec_slave_info_t slave_info{};
+        if (ecrt_master_get_slave(master_, config.slaves[slave_index].position,
+                                  &slave_info) == 0) {
+            const std::uint8_t al = slave_info.al_state;
+            if (al != EC_AL_STATE_PREOP) {
+                std::cout << "slave[" << slave_index << "] is in "
+                          << alStateName(al) << " at startup"
+                          << " — waiting for IgH to drive it to PREOP\n";
+            }
+        }
+    }
     if (!waitForSlavesInPreop(config, error)) {
         reset();
         return false;
