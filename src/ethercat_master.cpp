@@ -14,6 +14,11 @@ namespace {
 
 constexpr auto kPreopPollInterval = std::chrono::milliseconds(10);
 constexpr std::size_t kPreopMaxAttempts = 500U;
+// Number of consecutive all-PREOP polls required before proceeding with
+// PDO configuration. This guards against the IgH kernel module transiently
+// setting error_flag while driving a slave from OP back to PREOP: the slave
+// appears ready on one sample but is not yet stable enough for PDO remapping.
+constexpr std::size_t kPreopStableConfirmations = 5U;
 
 const char *alStateName(std::uint8_t al_state) noexcept {
     switch (al_state) {
@@ -320,6 +325,7 @@ bool EthercatMaster::waitForSlavesInPreop(
     error.clear();
     std::size_t pending_slave = 0;
     ec_slave_info_t pending_info{};
+    std::size_t stable_count = 0;
 
     for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
         bool all_ready = true;
@@ -338,8 +344,19 @@ bool EthercatMaster::waitForSlavesInPreop(
         }
 
         if (all_ready) {
-            return true;
+            // Require kPreopStableConfirmations consecutive all-ready polls before
+            // proceeding. The IgH kernel module may briefly set error_flag while
+            // driving a slave from OP back to PREOP; a single passing sample is
+            // not sufficient evidence that the slave is stable enough for PDO
+            // remapping.
+            ++stable_count;
+            if (stable_count >= kPreopStableConfirmations) {
+                return true;
+            }
+        } else {
+            stable_count = 0;
         }
+
         if (attempt + 1U < max_attempts) {
             wait();
         }
