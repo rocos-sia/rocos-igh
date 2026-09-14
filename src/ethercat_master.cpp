@@ -2,7 +2,9 @@
 
 #include "shared_memory_config.hpp"
 
+#include <cerrno>
 #include <chrono>
+#include <ctime>
 #include <thread>
 
 namespace rocos {
@@ -201,9 +203,27 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
-    if (ecrt_master_activate(master_) != 0) {
-        error = "failed to activate EtherCAT master";
+    const auto read_application_time = [](std::uint64_t &application_time) {
+        timespec now{};
+        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            return errno;
+        }
+        application_time = static_cast<std::uint64_t>(now.tv_sec) * 1000000000ULL +
+                           static_cast<std::uint64_t>(now.tv_nsec);
+        return 0;
+    };
+    const auto apply_application_time = [this](std::uint64_t application_time) {
+        return ecrt_master_application_time(master_, application_time);
+    };
+    const auto activate_master = [this] {
+        return ecrt_master_activate(master_);
+    };
+    if (!activateWithInitialApplicationTime(
+            dc_runtime.enabled, error, read_application_time,
+            apply_application_time, activate_master)) {
+        const DcError dc_error = last_dc_error_;
         reset();
+        last_dc_error_ = dc_error;
         return false;
     }
 
@@ -286,6 +306,47 @@ bool EthercatMaster::waitForSlavesInPreop(
             ", error_flag=" +
             std::to_string(static_cast<unsigned int>(pending_info.error_flag)) + ")";
     return false;
+}
+
+bool EthercatMaster::activateWithInitialApplicationTime(
+    bool dc_enabled,
+    std::string &error,
+    const std::function<int(std::uint64_t &)> &read_time,
+    const std::function<int(std::uint64_t)> &apply_time,
+    const std::function<int()> &activate) {
+    error.clear();
+    last_dc_error_ = DcError{};
+    const auto seed_application_time = [&](const char *position) {
+        std::uint64_t application_time = 0;
+        const int clock_result = read_time(application_time);
+        if (clock_result != 0) {
+            error = std::string("failed to read CLOCK_MONOTONIC ") + position +
+                    " master activation (error " +
+                    std::to_string(clock_result) + ")";
+            return false;
+        }
+        const int application_result = apply_time(application_time);
+        if (application_result != 0) {
+            recordDcError(DcErrorStage::ApplicationTime, application_result);
+            error = std::string("failed to set DC application time ") + position +
+                    " master activation (error " +
+                    std::to_string(application_result) + ")";
+            return false;
+        }
+        return true;
+    };
+
+    if (dc_enabled && !seed_application_time("before")) {
+        return false;
+    }
+    if (activate() != 0) {
+        error = "failed to activate EtherCAT master";
+        return false;
+    }
+    if (dc_enabled && !seed_application_time("after")) {
+        return false;
+    }
+    return true;
 }
 
 // Receives a frame and processes both domains' working counters (rt_safe).
