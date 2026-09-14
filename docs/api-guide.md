@@ -37,7 +37,9 @@
 │  4. ecrt_slave_config_pdos()     配置 PDO/同步管理器映射                    │
 │  5a. ecrt_domain_reg_pdo_entry_list()  批量注册 PDO 条目                │
 │  5b. ecrt_slave_config_sdo*() / ecrt_slave_config_*  其它配置(可选)       │
+│  5c. DC 启用时: ecrt_master_application_time() 播种初始应用时间             │
 │  6. ecrt_master_activate()   结束配置、进入运行阶段                         │
+│  6a. DC 启用时: 立即刷新 ecrt_master_application_time()                    │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -494,21 +496,31 @@ SYNC0 周期由 `--period-us` 换算为纳秒。启用后若没有且仅有一�
 若使用分布式时钟同步:
 
 ```c
-// 激活前:先配置各从站 DC，再选择参考时钟
+// 激活前:先配置各从站 DC、选择参考时钟并播种应用时间
 ecrt_slave_config_dc(sc, assign, sync0_cycle, sync0_shift,
                      sync1_cycle, sync1_shift);
 ecrt_master_select_reference_clock(dc_ref_sc);
+ecrt_master_application_time(master, monotonic_time_ns);
+
+ecrt_master_activate(master);
+ecrt_master_application_time(master, refreshed_monotonic_time_ns);
 
 // 运行期,每个周期顺序调用:
-ecrt_master_application_time(master, app_time);   // 设置应用时间
-ecrt_master_sync_reference_clock(master);         // 把参考时钟同步到应用时间
-ecrt_master_sync_slave_clocks(master);            // 补偿所有从站时钟漂移
-ecrt_master_reference_clock_time(master, &time);   // 读取参考时钟低 32 位
+ecrt_master_application_time(master, app_time);
+ecrt_master_sync_reference_clock(master);
+ecrt_master_sync_slave_clocks(master);
 ```
 
-- `ecrt_master_application_time()` 需在每个实时周期、固定时刻调用,用于计算从站 SYNC0/1 中断相位。
-- 当前周期顺序为 application time → receive/process → PDO 复制/状态 → domain queue → reference/slave clock sync → send。
-- 配置期 DC 调用失败会中止启动；运行期 DC 调用失败会停止周期任务并返回 `EIO`。
+- 本机 IgH 1.6.12 实现会在首次收到非零应用时间时初始化内部
+  `dc_ref_time`。ROCOS 因此在激活前播种一次，并在激活返回后、获取域缓冲区和
+  创建 IPC 之前立即刷新一次，避免异步状态机在 `dc_ref_time == 0` 时跳过从站
+  64 位 System Time Offset 初始化。
+- 激活前调用是针对该 IgH 实现的启动期例外；激活后的周期调用仍是正常的
+  `master_op, rt_safe` 用法，并保持在实时循环的固定位置。
+- 当前周期顺序为 application time → receive/process → PDO 复制/状态 →
+  domain queue → reference/slave clock sync → send。
+- 配置期 DC 调用失败会中止启动；运行期 DC 调用失败会停止周期任务并返回
+  `EIO`。
 - `ecrt_master_sync_monitor_queue()` / `ecrt_master_sync_monitor_process()` 可监测 DC 同步精度(所有从站时钟差的上界估计)。
 - `ecrt_master_set_send_interval()` 在激活前设置两次 `ecrt_master_send()` 的间隔,帮助主站决定可追加到帧中的数据量。
 
