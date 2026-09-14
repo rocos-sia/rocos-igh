@@ -26,6 +26,20 @@ struct BusState {
     ec_wc_state_t output_wc_state{EC_WC_ZERO}; ///< Output domain WC state.
 };
 
+enum class DcErrorStage {
+    None,
+    ApplicationTime,
+    SyncReferenceClock,
+    SyncSlaveClocks,
+};
+
+struct DcError {
+    DcErrorStage stage{DcErrorStage::None};
+    int error_code{0};
+};
+
+const char *dcErrorStageName(DcErrorStage stage) noexcept;
+
 /**
  * @brief RAII owner of one IgH master with separate input and output domains.
  *
@@ -57,11 +71,17 @@ public:
      * @param error     Receives a description of the first failure.
      * @return True on success.
      */
-    bool initialize(unsigned int master_id, StaticSlaveConfig config, std::string &error);
+    bool initialize(unsigned int master_id,
+                    StaticSlaveConfig config,
+                    bool dc_enabled,
+                    std::uint32_t period_us,
+                    std::string &error);
     /// @brief Receives a frame and processes both domains (rt_safe).
     void receiveAndProcess() noexcept;
-    /// @brief Re-queues both domains and sends all queued datagrams (rt_safe).
-    void queueAndSend() noexcept;
+    /// @brief Sets the DC application time for the current cycle (rt_safe).
+    bool setApplicationTime(std::uint64_t app_time_ns) noexcept;
+    /// @brief Re-queues both domains, queues DC sync, and sends datagrams (rt_safe).
+    bool queueAndSend() noexcept;
     /// @brief Returns a non-allocating snapshot of master and domain state.
     BusState readState() noexcept;
 
@@ -75,6 +95,8 @@ public:
     std::size_t outputSize() const noexcept;
     /// @brief Returns true once initialize() has completed successfully.
     bool initialized() const noexcept;
+    /// @brief Returns the last realtime DC API failure without allocation.
+    DcError lastDcError() const noexcept;
 
 private:
     friend struct EthercatMasterTestPeer;
@@ -88,6 +110,7 @@ private:
         const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
         const std::function<void()> &wait,
         std::size_t max_attempts);
+    void recordDcError(DcErrorStage stage, int error_code) noexcept;
     void reset() noexcept;
 
     ec_master_t *master_{nullptr};
@@ -97,6 +120,8 @@ private:
     std::uint8_t *output_data_{nullptr};
     std::size_t input_size_{0};
     std::size_t output_size_{0};
+    bool dc_enabled_{false};
+    DcError last_dc_error_{};
     bool initialized_{false};
 };
 

@@ -142,7 +142,8 @@ int main(int argc, char **argv) {
 
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
     rocos::EthercatMaster master; // RAII 封装一个 IgH 主站
-    if (!master.initialize(options.master_id, config, error)) { // 配置或激活失败
+    if (!master.initialize(options.master_id, config, options.dc_enabled,
+                           options.period_us, error)) { // 配置或激活失败
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
@@ -183,6 +184,16 @@ int main(int argc, char **argv) {
 
     if (run_result != 0) { // 周期任务以错误码结束（如时钟调用失败）
         std::cerr << "cyclic task failed: " << std::strerror(run_result) << '\n';
+        const rocos::DcError dc_error = master.lastDcError();
+        if (dc_error.stage != rocos::DcErrorStage::None) {
+            const int positive_error = dc_error.error_code < 0
+                                           ? -dc_error.error_code
+                                           : dc_error.error_code;
+            std::cerr << "DC operation failed: "
+                      << rocos::dcErrorStageName(dc_error.stage)
+                      << " rc=" << dc_error.error_code
+                      << " (" << std::strerror(positive_error) << ")\n";
+        }
         return EXIT_FAILURE;
     }
 

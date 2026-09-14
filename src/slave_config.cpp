@@ -30,6 +30,7 @@ struct LoadedSlaveConfig::Impl {
         std::vector<ec_pdo_info_t> tx_pdos;
         std::vector<ec_sync_info_t> syncs;
         std::vector<PdoEntrySpec> entries;
+        std::optional<DistributedClockConfig> dc;
     };
 
     std::vector<SlaveStorage> storage;
@@ -103,6 +104,7 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
             Impl::SlaveStorage &target = built->storage[slave_index];
             target.id = source.id;
             target.name = source.name;
+            target.dc = source.dc;
 
             const std::size_t total_entries = entryCount(source.rx_pdos) +
                                               entryCount(source.tx_pdos);
@@ -131,7 +133,7 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
         for (Impl::SlaveStorage &target : built->storage) {
             built->slaves.push_back({0, target.id, 0, 0, target.name.c_str(),
                                      target.syncs.data(), target.entries.data(),
-                                     target.entries.size()});
+                                     target.entries.size(), target.dc});
         }
 
         const StaticSlaveConfig candidate{built->slaves.data(), built->slaves.size()};
@@ -188,12 +190,68 @@ void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &outpu
 
         print_pdos(storage.rx_storage, "RxPDO", 2, "master -> slave");
         print_pdos(storage.tx_storage, "TxPDO", 3, "slave -> master");
+        if (slave.dc.has_value()) {
+            output << "  DC: assign_activate=0x" << std::hex << std::setfill('0')
+                   << std::setw(4) << slave.dc->assign_activate << std::dec
+                   << std::setfill(' ') << " sync0_cycle=--period-us"
+                   << " sync0_shift_ns=" << slave.dc->sync0_shift_ns
+                   << " sync1_cycle_ns=" << slave.dc->sync1_cycle_ns
+                   << " sync1_shift_ns=" << slave.dc->sync1_shift_ns
+                   << " reference=" << (slave.dc->reference ? "yes" : "no") << '\n';
+        }
     }
 
     output.flags(saved_flags);
     output.fill(saved_fill);
 }
 #endif
+
+bool buildDistributedClockRuntimeConfig(const StaticSlaveConfig &config,
+                                        bool dc_enabled,
+                                        std::uint32_t period_us,
+                                        DistributedClockRuntimeConfig &runtime,
+                                        std::string &error) noexcept {
+    runtime = DistributedClockRuntimeConfig{};
+    error.clear();
+    if (!dc_enabled) {
+        return true;
+    }
+    if (period_us > std::numeric_limits<std::uint32_t>::max() / 1000U) {
+        error = "DC SYNC0 cycle exceeds uint32 nanoseconds";
+        return false;
+    }
+
+    std::size_t dc_slave_count = 0;
+    std::size_t reference_count = 0;
+    for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
+        const SlaveSpec &slave = config.slaves[slave_index];
+        if (!slave.dc.has_value()) {
+            continue;
+        }
+        ++dc_slave_count;
+        if (slave.dc->reference) {
+            runtime.reference_slave_index = slave_index;
+            ++reference_count;
+        }
+    }
+
+    if (dc_slave_count == 0U) {
+        error = "DC is enabled but no DC-configured slave exists";
+        return false;
+    }
+    if (reference_count == 0U) {
+        error = "DC is enabled but no reference slave is configured";
+        return false;
+    }
+    if (reference_count > 1U) {
+        error = "multiple DC reference slaves are configured";
+        return false;
+    }
+
+    runtime.enabled = true;
+    runtime.sync0_cycle_ns = period_us * 1000U;
+    return true;
+}
 
 bool applyDiscoveredIdentity(SlaveSpec &slave,
                              std::uint32_t vendor_id,

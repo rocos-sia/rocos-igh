@@ -486,10 +486,17 @@ int ecrt_master_sdo_upload(master, slave_pos, index, subindex,
 
 ## 8. 分布式时钟(DC)相关
 
+本项目通过 `--dc on|off` 控制 DC，默认关闭。设备特定的
+`AssignActivate`、SYNC 偏移和参考时钟标记来自 PDO YAML 的可选 `dc` 块；
+SYNC0 周期由 `--period-us` 换算为纳秒。启用后若没有且仅有一个参考从站，
+主站会在请求硬件前拒绝配置。
+
 若使用分布式时钟同步:
 
 ```c
-// 激活前:选择参考时钟、配置各从站 DC(见 3.6)
+// 激活前:先配置各从站 DC，再选择参考时钟
+ecrt_slave_config_dc(sc, assign, sync0_cycle, sync0_shift,
+                     sync1_cycle, sync1_shift);
 ecrt_master_select_reference_clock(dc_ref_sc);
 
 // 运行期,每个周期顺序调用:
@@ -500,6 +507,8 @@ ecrt_master_reference_clock_time(master, &time);   // 读取参考时钟低 32 �
 ```
 
 - `ecrt_master_application_time()` 需在每个实时周期、固定时刻调用,用于计算从站 SYNC0/1 中断相位。
+- 当前周期顺序为 application time → receive/process → PDO 复制/状态 → domain queue → reference/slave clock sync → send。
+- 配置期 DC 调用失败会中止启动；运行期 DC 调用失败会停止周期任务并返回 `EIO`。
 - `ecrt_master_sync_monitor_queue()` / `ecrt_master_sync_monitor_process()` 可监测 DC 同步精度(所有从站时钟差的上界估计)。
 - `ecrt_master_set_send_interval()` 在激活前设置两次 `ecrt_master_send()` 的间隔,帮助主站决定可追加到帧中的数据量。
 

@@ -172,9 +172,15 @@ memcpy(output_domain_data, pd_output, output_domain_size)
 update EcatBus state and timing counters
 ecrt_domain_queue(input_domain)
 ecrt_domain_queue(output_domain)
+[DC on] ecrt_master_sync_reference_clock
+[DC on] ecrt_master_sync_slave_clocks
 ecrt_master_send
 notify waiting clients
 ```
+
+启用 `--dc on` 时，每次唤醒并读取 `CLOCK_MONOTONIC` 后，还会在接收过程数据前
+调用 `ecrt_master_application_time`。从站 DC 与参考时钟选择在主站激活前完成；
+运行期 DC 调用失败会以 `EIO` 停止周期循环。DC 关闭时不调用任何 DC API。
 
 PDO 方向以主站视角定义：
 
@@ -316,7 +322,7 @@ ctest --test-dir build-master --output-on-failure
 - 主站间同步或统一管理进程。
 - PDO 双缓冲、历史队列或每客户端独立数据副本。
 - 应用层自动重扫和热插拔重配置。
-- Distributed Clocks 高级同步策略；待基本 1 ms 周期稳定后单独设计。
+- DC 同步精度监控与自动相位调优。
 
 ## 14. 实现顺序
 

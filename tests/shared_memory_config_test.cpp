@@ -56,6 +56,12 @@ struct EthercatMasterTestPeer {
         master.input_size_ = input_size;
         master.output_size_ = output_size;
     }
+
+    static void recordDcError(EthercatMaster &master,
+                              DcErrorStage stage,
+                              int error_code) {
+        master.recordDcError(stage, error_code);
+    }
 };
 }  // namespace rocos
 #endif
@@ -376,6 +382,36 @@ bool testRuntimeOptions() {
     CHECK(options.master_id == 1U);
     CHECK(options.period_us == 1000U);
     CHECK(options.config_path == "config/pdo.yaml");
+    CHECK(!options.dc_enabled);
+
+    char dc_flag[] = "--dc";
+    char dc_on[] = "on";
+    char *dc_enabled[]{program, config_flag, config_value, dc_flag, dc_on};
+    CHECK(rocos::parseRuntimeOptions(5, dc_enabled, options, error));
+    CHECK(options.dc_enabled);
+
+    char dc_off[] = "off";
+    char *dc_disabled[]{program, dc_flag, dc_off, config_flag, config_value};
+    CHECK(rocos::parseRuntimeOptions(5, dc_disabled, options, error));
+    CHECK(!options.dc_enabled);
+
+    char dc_invalid[] = "yes";
+    char *invalid_dc[]{program, config_flag, config_value, dc_flag, dc_invalid};
+    CHECK(!rocos::parseRuntimeOptions(5, invalid_dc, options, error));
+    CHECK(error.find("--dc") != std::string::npos);
+
+    char *missing_dc_value[]{program, config_flag, config_value, dc_flag};
+    CHECK(!rocos::parseRuntimeOptions(4, missing_dc_value, options, error));
+
+    char *duplicate_dc[]{program, config_flag, config_value, dc_flag, dc_on,
+                         dc_flag, dc_off};
+    CHECK(!rocos::parseRuntimeOptions(7, duplicate_dc, options, error));
+
+    char overflow_period[] = "4294968";
+    char *dc_period_overflow[]{program, period_flag, overflow_period, dc_flag, dc_on,
+                               config_flag, config_value};
+    CHECK(!rocos::parseRuntimeOptions(7, dc_period_overflow, options, error));
+    CHECK(error.find("period-us") != std::string::npos);
 
     char *missing_config[]{program, master_flag, master_value};
     CHECK(!rocos::parseRuntimeOptions(3, missing_config, options, error));
@@ -620,6 +656,68 @@ bool testBuildsRuntimeSlavePdoMapping() {
     return true;
 }
 
+bool testBuildsAndValidatesDistributedClockRuntimeConfig() {
+    rocos::PdoBusConfig source = makeRuntimePdoConfig();
+    source.slaves[0].dc = rocos::DistributedClockConfig{
+        0x0300U, -250000, 0U, 0, true
+    };
+
+    rocos::LoadedSlaveConfig loaded;
+    std::string error;
+    CHECK(loaded.build(std::move(source), error));
+    const rocos::StaticSlaveConfig config = loaded.view();
+    CHECK(config.slaves[0].dc.has_value());
+    CHECK(config.slaves[0].dc->assign_activate == 0x0300U);
+    CHECK(config.slaves[0].dc->sync0_shift_ns == -250000);
+    CHECK(!config.slaves[1].dc.has_value());
+
+    rocos::DistributedClockRuntimeConfig runtime{};
+    CHECK(rocos::buildDistributedClockRuntimeConfig(config, true, 1000U,
+                                                     runtime, error));
+    CHECK(error.empty());
+    CHECK(runtime.enabled);
+    CHECK(runtime.sync0_cycle_ns == 1000000U);
+    CHECK(runtime.reference_slave_index == 0U);
+
+    CHECK(rocos::buildDistributedClockRuntimeConfig(config, false, 5000000U,
+                                                     runtime, error));
+    CHECK(!runtime.enabled);
+
+    rocos::LoadedSlaveConfig no_dc_loaded;
+    CHECK(no_dc_loaded.build(makeRuntimePdoConfig(), error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(no_dc_loaded.view(), true, 1000U,
+                                                      runtime, error));
+    CHECK(error.find("no DC-configured slave") != std::string::npos);
+
+    rocos::PdoBusConfig no_reference_source = makeRuntimePdoConfig();
+    no_reference_source.slaves[0].dc = rocos::DistributedClockConfig{
+        0x0300U, 0, 0U, 0, false
+    };
+    rocos::LoadedSlaveConfig no_reference_loaded;
+    CHECK(no_reference_loaded.build(std::move(no_reference_source), error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(no_reference_loaded.view(), true,
+                                                      1000U, runtime, error));
+    CHECK(error.find("reference") != std::string::npos);
+
+    rocos::PdoBusConfig duplicate_reference_source = makeRuntimePdoConfig();
+    duplicate_reference_source.slaves[0].dc = rocos::DistributedClockConfig{
+        0x0300U, 0, 0U, 0, true
+    };
+    duplicate_reference_source.slaves[1].dc = rocos::DistributedClockConfig{
+        0x0300U, 0, 0U, 0, true
+    };
+    rocos::LoadedSlaveConfig duplicate_reference_loaded;
+    CHECK(duplicate_reference_loaded.build(std::move(duplicate_reference_source), error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(duplicate_reference_loaded.view(), true,
+                                                      1000U, runtime, error));
+    CHECK(error.find("multiple DC reference") != std::string::npos);
+
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(config, true, 4294968U,
+                                                      runtime, error));
+    CHECK(error.find("SYNC0") != std::string::npos);
+    return true;
+}
+
 bool testPrintsRuntimeSlavePdoMapping() {
     rocos::LoadedSlaveConfig loaded;
     std::string error;
@@ -723,9 +821,17 @@ bool testMasterCyclicCallsBeforeInitialization() {
     CHECK(master.outputData() == nullptr);
     CHECK(master.inputSize() == 0);
     CHECK(master.outputSize() == 0);
+    CHECK(master.lastDcError().stage == rocos::DcErrorStage::None);
+    CHECK(master.lastDcError().error_code == 0);
+
+    rocos::EthercatMasterTestPeer::recordDcError(
+        master, rocos::DcErrorStage::SyncReferenceClock, -ENXIO);
+    CHECK(master.lastDcError().stage == rocos::DcErrorStage::SyncReferenceClock);
+    CHECK(master.lastDcError().error_code == -ENXIO);
 
     master.receiveAndProcess();
-    master.queueAndSend();
+    CHECK(master.setApplicationTime(42U));
+    CHECK(master.queueAndSend());
 
     const rocos::BusState state = master.readState();
     CHECK(state.responding_slaves == 0U);
@@ -757,7 +863,7 @@ bool testInitializeRejectsAlreadyInitializedWithoutReset() {
 
     std::string error;
     const rocos::StaticSlaveConfig empty_config{};
-    CHECK(!master.initialize(0, empty_config, error));
+    CHECK(!master.initialize(0, empty_config, false, 1000U, error));
     CHECK(error == "master already initialized");
     CHECK(master.initialized());
     CHECK(master.inputData() == seeded_input);
@@ -796,7 +902,7 @@ bool testInitializeFreshFailureResetsState() {
 
     std::string error;
     const rocos::StaticSlaveConfig empty_config{};
-    CHECK(!master.initialize(0, empty_config, error));
+    CHECK(!master.initialize(0, empty_config, false, 1000U, error));
     CHECK(error == "no slave configuration compiled");
     CHECK(!master.initialized());
     CHECK(master.inputData() == nullptr);
@@ -908,6 +1014,9 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testBuildsRuntimeSlavePdoMapping()) {
+        return EXIT_FAILURE;
+    }
+    if (!testBuildsAndValidatesDistributedClockRuntimeConfig()) {
         return EXIT_FAILURE;
     }
     if (!testPrintsRuntimeSlavePdoMapping()) {

@@ -37,6 +37,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
     bool config_seen = false;
     bool master_id_seen = false;
     bool period_us_seen = false;
+    bool dc_seen = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag(argv[i]);
@@ -44,7 +45,8 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             options.show_help = true;
             continue;
         }
-        if (flag != "--config" && flag != "--master-id" && flag != "--period-us") {
+        if (flag != "--config" && flag != "--master-id" && flag != "--period-us" &&
+            flag != "--dc") {
             error = "unknown option: " + std::string(flag);
             return false;
         }
@@ -66,6 +68,23 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             }
             options.config_path = std::string(value_text);
             config_seen = true;
+            continue;
+        }
+
+        if (flag == "--dc") {
+            if (dc_seen) {
+                error = "duplicate option: --dc";
+                return false;
+            }
+            if (value_text == "on") {
+                options.dc_enabled = true;
+            } else if (value_text == "off") {
+                options.dc_enabled = false;
+            } else {
+                error = "invalid value for option: --dc (expected on or off)";
+                return false;
+            }
+            dc_seen = true;
             continue;
         }
 
@@ -109,13 +128,18 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         error = "missing required option: --config";
         return false;
     }
+    if (options.dc_enabled &&
+        options.period_us > std::numeric_limits<std::uint32_t>::max() / 1000U) {
+        error = "period-us is too large for DC SYNC0 nanoseconds";
+        return false;
+    }
 
     return true;
 }
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--help]";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--help]";
 }
 
 }  // namespace rocos

@@ -52,6 +52,7 @@ struct SlaveSpec {
     const ec_sync_info_t *syncs; ///< IgH sync-manager/PDO table (EC_END terminated).
     PdoEntrySpec *entries;       ///< PDO entry descriptors (mutable offsets).
     std::size_t entry_count;     ///< Number of entries in `entries`.
+    std::optional<DistributedClockConfig> dc; ///< Optional device-specific DC settings.
 };
 
 /**
@@ -61,6 +62,18 @@ struct StaticSlaveConfig {
     SlaveSpec *slaves;       ///< Slave descriptors.
     std::size_t slave_count; ///< Number of slaves.
 };
+
+struct DistributedClockRuntimeConfig {
+    bool enabled{false};
+    std::uint32_t sync0_cycle_ns{0};
+    std::size_t reference_slave_index{0};
+};
+
+bool buildDistributedClockRuntimeConfig(const StaticSlaveConfig &config,
+                                        bool dc_enabled,
+                                        std::uint32_t period_us,
+                                        DistributedClockRuntimeConfig &runtime,
+                                        std::string &error) noexcept;
 
 #if ROCOS_IGH_BUILD_MASTER
 /** @brief Owns dynamic IgH configuration storage and exposes stable pointer views. */

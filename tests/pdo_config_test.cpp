@@ -68,6 +68,17 @@ std::string replaceOnce(std::string source,
     return source;
 }
 
+std::string validDcYaml() {
+    return replaceOnce(validYaml(), "    rx_pdos:\n", R"yaml(    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: -250000
+      sync1_cycle_ns: 2000000
+      sync1_shift_ns: 125000
+      reference: true
+    rx_pdos:
+)yaml");
+}
+
 bool expectConfigError(const std::string &yaml, const std::string &error_fragment) {
     const TemporaryYamlFile file(yaml);
     rocos::PdoBusConfig config;
@@ -124,6 +135,93 @@ slaves:
     CHECK(config.slaves[1].id == 1U);
     CHECK(config.slaves[1].tx_pdos[0].entries[0].name == "Status Word");
     return true;
+}
+
+bool testLoadsDistributedClockConfig() {
+  const TemporaryYamlFile file(validDcYaml());
+  rocos::PdoBusConfig config;
+  std::string error;
+  CHECK(rocos::loadPdoConfig(file.path(), config, error));
+  CHECK(error.empty());
+  CHECK(config.slaves.size() == 1U);
+  CHECK(config.slaves[0].dc.has_value());
+  CHECK(config.slaves[0].dc->assign_activate == 0x0300U);
+  CHECK(config.slaves[0].dc->sync0_shift_ns == -250000);
+  CHECK(config.slaves[0].dc->sync1_cycle_ns == 2000000U);
+  CHECK(config.slaves[0].dc->sync1_shift_ns == 125000);
+  CHECK(config.slaves[0].dc->reference);
+
+  const TemporaryYamlFile defaults_file(replaceOnce(
+    validDcYaml(),
+    "      sync0_shift_ns: -250000\n      sync1_cycle_ns: 2000000\n"
+    "      sync1_shift_ns: 125000\n      reference: true\n",
+    ""));
+  CHECK(rocos::loadPdoConfig(defaults_file.path(), config, error));
+  CHECK(config.slaves[0].dc.has_value());
+  CHECK(config.slaves[0].dc->sync0_shift_ns == 0);
+  CHECK(config.slaves[0].dc->sync1_cycle_ns == 0U);
+  CHECK(config.slaves[0].dc->sync1_shift_ns == 0);
+  CHECK(!config.slaves[0].dc->reference);
+  return true;
+}
+
+bool testRejectsInvalidDistributedClockConfig() {
+  std::vector<std::pair<std::string, std::string>> cases;
+  cases.emplace_back(replaceOnce(validDcYaml(), "      assign_activate: 0x0300\n", ""),
+             "dc.assign_activate is required");
+  cases.emplace_back(replaceOnce(validDcYaml(), "assign_activate: 0x0300", "assign_activate: 0"),
+             "dc.assign_activate must be non-zero");
+  cases.emplace_back(replaceOnce(validDcYaml(), "assign_activate: 0x0300", "assign_activate: 65536"),
+             "dc.assign_activate is out of range");
+  cases.emplace_back(replaceOnce(validDcYaml(), "sync0_shift_ns: -250000", "sync0_shift_ns: 2147483648"),
+             "dc.sync0_shift_ns is out of range");
+  cases.emplace_back(replaceOnce(validDcYaml(), "sync1_cycle_ns: 2000000", "sync1_cycle_ns: 4294967296"),
+             "dc.sync1_cycle_ns is out of range");
+  cases.emplace_back(replaceOnce(validDcYaml(), "reference: true", "reference: yes"),
+             "dc.reference must be a boolean");
+  cases.emplace_back(replaceOnce(validDcYaml(), "reference: true", "reference: \"true\""),
+             "dc.reference must be a boolean");
+  cases.emplace_back(replaceOnce(validDcYaml(), "      reference: true\n", "      reference: true\n      typo: 1\n"),
+             "dc.typo is not allowed");
+
+  for (const auto &test_case : cases) {
+    CHECK(expectConfigError(test_case.first, test_case.second));
+  }
+
+  const TemporaryYamlFile duplicate_reference_file(R"yaml(version: 1
+slaves:
+  - id: 0
+    name: First
+    dc:
+      assign_activate: 0x0300
+      reference: true
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - {name: Control, index: 0x6040, sub_index: 0, bit_length: 16}
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - {name: Status, index: 0x6041, sub_index: 0, bit_length: 16}
+  - id: 1
+    name: Second
+    dc:
+      assign_activate: 0x0300
+      reference: true
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - {name: Control, index: 0x6040, sub_index: 0, bit_length: 16}
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - {name: Status, index: 0x6041, sub_index: 0, bit_length: 16}
+)yaml");
+  rocos::PdoBusConfig config;
+  std::string error;
+  CHECK(!rocos::loadPdoConfig(duplicate_reference_file.path(), config, error));
+  CHECK(error.find("only one DC reference") != std::string::npos);
+  return true;
 }
 
   bool testRejectsInvalidConfigFields() {
@@ -205,6 +303,12 @@ slaves:
     CHECK(rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/pdo.yaml", config, error));
     CHECK(error.empty());
     CHECK(config.slaves.size() == 1U);
+    CHECK(config.slaves[0].dc.has_value());
+    CHECK(config.slaves[0].dc->assign_activate == 0x0300U);
+    CHECK(config.slaves[0].dc->sync0_shift_ns == 0);
+    CHECK(config.slaves[0].dc->sync1_cycle_ns == 0U);
+    CHECK(config.slaves[0].dc->sync1_shift_ns == 0);
+    CHECK(config.slaves[0].dc->reference);
     CHECK(config.slaves[0].rx_pdos[0].entries.size() == 3U);
     CHECK(config.slaves[0].tx_pdos[0].entries.size() == 3U);
     return true;
@@ -214,6 +318,12 @@ slaves:
 
 int main() {
   if (!testLoadsValidMultiSlaveConfig()) {
+    return 1;
+  }
+  if (!testLoadsDistributedClockConfig()) {
+    return 1;
+  }
+  if (!testRejectsInvalidDistributedClockConfig()) {
     return 1;
   }
   if (!testRejectsInvalidConfigFields()) {

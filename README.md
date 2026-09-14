@@ -39,10 +39,19 @@ The executable is `rocos_igh_master` and supports:
 - `--config <PDO YAML path>` (required)
 - `--master-id <non-negative integer>`
 - `--period-us <integer >= 1000>`
+- `--dc <on|off>` (default: `off`)
 - `--help`
 
 ```bash
 ./build-master/rocos_igh_master --config config/pdo.yaml --master-id 0 --period-us 1000
+```
+
+Distributed Clocks remain disabled unless explicitly enabled. Enabling DC also
+requires device-specific `dc` blocks in the YAML configuration, including
+exactly one reference slave:
+
+```bash
+./build-master/rocos_igh_master --config config/device.yaml --period-us 1000 --dc on
 ```
 
 The YAML file lists slaves in physical bus order and configures each slave's

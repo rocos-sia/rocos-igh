@@ -4,6 +4,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <charconv>
 #include <initializer_list>
 #include <limits>
 #include <stdexcept>
@@ -98,6 +99,86 @@ std::uint64_t parseUnsigned(const YAML::Node &node,
         throw std::runtime_error(path + " is out of range");
     }
     return value;
+}
+
+std::int64_t parseSigned(const YAML::Node &node,
+                         const std::string &path,
+                         std::int64_t minimum,
+                         std::int64_t maximum) {
+    if (!node.IsScalar() || node.Tag() != "?") {
+        throw std::runtime_error(path + " must be a signed integer");
+    }
+
+    const std::string text = node.Scalar();
+    if (text.empty() || text.front() == '+') {
+        throw std::runtime_error(path + " must be a signed integer");
+    }
+
+    std::int64_t value = 0;
+    const char *const begin = text.data();
+    const char *const end = begin + text.size();
+    const std::from_chars_result parsed = std::from_chars(begin, end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        throw std::runtime_error(path + " must be a signed integer");
+    }
+    if (value < minimum || value > maximum) {
+        throw std::runtime_error(path + " is out of range");
+    }
+    return value;
+}
+
+bool parseBoolean(const YAML::Node &node, const std::string &path) {
+    if (!node.IsScalar() || node.Tag() != "?") {
+        throw std::runtime_error(path + " must be a boolean");
+    }
+    const std::string text = node.Scalar();
+    if (text == "true") {
+        return true;
+    }
+    if (text == "false") {
+        return false;
+    }
+    throw std::runtime_error(path + " must be a boolean");
+}
+
+DistributedClockConfig parseDistributedClock(const YAML::Node &node,
+                                              const std::string &path) {
+    if (!node.IsMap()) {
+        throw std::runtime_error(path + " must be a mapping");
+    }
+    rejectUnknownKeys(node,
+                      {"assign_activate", "sync0_shift_ns", "sync1_cycle_ns",
+                       "sync1_shift_ns", "reference"},
+                      path);
+
+    DistributedClockConfig dc;
+    dc.assign_activate = static_cast<std::uint16_t>(parseUnsigned(
+        requireNode(node, "assign_activate", path), path + ".assign_activate",
+        std::numeric_limits<std::uint16_t>::max()));
+    if (dc.assign_activate == 0U) {
+        throw std::runtime_error(path + ".assign_activate must be non-zero");
+    }
+    if (node["sync0_shift_ns"]) {
+        dc.sync0_shift_ns = static_cast<std::int32_t>(parseSigned(
+            node["sync0_shift_ns"], path + ".sync0_shift_ns",
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max()));
+    }
+    if (node["sync1_cycle_ns"]) {
+        dc.sync1_cycle_ns = static_cast<std::uint32_t>(parseUnsigned(
+            node["sync1_cycle_ns"], path + ".sync1_cycle_ns",
+            std::numeric_limits<std::uint32_t>::max()));
+    }
+    if (node["sync1_shift_ns"]) {
+        dc.sync1_shift_ns = static_cast<std::int32_t>(parseSigned(
+            node["sync1_shift_ns"], path + ".sync1_shift_ns",
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max()));
+    }
+    if (node["reference"]) {
+        dc.reference = parseBoolean(node["reference"], path + ".reference");
+    }
+    return dc;
 }
 
 std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
@@ -196,7 +277,7 @@ bool loadPdoConfig(const std::string &path,
             if (!slave_node.IsMap()) {
                 throw std::runtime_error(slave_path + " must be a mapping");
             }
-            rejectUnknownKeys(slave_node, {"id", "name", "rx_pdos", "tx_pdos"},
+            rejectUnknownKeys(slave_node, {"id", "name", "dc", "rx_pdos", "tx_pdos"},
                               slave_path);
 
             SlavePdoConfig slave;
@@ -208,6 +289,9 @@ bool loadPdoConfig(const std::string &path,
             }
             slave.name = parseString(requireNode(slave_node, "name", slave_path),
                                      slave_path + ".name", MAX_SLAVE_NAME_LEN - 1U);
+            if (slave_node["dc"]) {
+                slave.dc = parseDistributedClock(slave_node["dc"], slave_path + ".dc");
+            }
             slave.rx_pdos = parsePdos(requireNode(slave_node, "rx_pdos", slave_path),
                                       slave_path + ".rx_pdos");
             slave.tx_pdos = parsePdos(requireNode(slave_node, "tx_pdos", slave_path),
@@ -231,6 +315,16 @@ bool loadPdoConfig(const std::string &path,
                                          ".tx_pdos entries exceed MAX_PDINPUT_NUM");
             }
             loaded.slaves.push_back(std::move(slave));
+        }
+
+        std::size_t reference_count = 0;
+        for (const SlavePdoConfig &slave : loaded.slaves) {
+            if (slave.dc.has_value() && slave.dc->reference) {
+                ++reference_count;
+            }
+        }
+        if (reference_count > 1U) {
+            throw std::runtime_error("only one DC reference slave is allowed");
         }
 
         config = std::move(loaded);

@@ -7,7 +7,8 @@
 ./build-master/rocos_igh_master \
   --config config/pdo.yaml \
   --master-id 0 \
-  --period-us 1000
+  --period-us 1000 \
+  --dc off
 ```
 
 文件不可读取、YAML 语法错误、缺少字段或字段值非法时，主站会在请求
@@ -55,7 +56,8 @@ slaves:
             bit_length: 16
 ```
 
-仓库中的 [示例配置](../config/pdo.yaml) 与上述内容一致。
+仓库中的 [示例配置](../config/pdo.yaml) 使用相同 PDO 映射，并额外包含从
+ZeroErr ESI 验证的 DC 配置。
 
 ## 字段说明
 
@@ -65,6 +67,12 @@ slaves:
 | `slaves` | 序列 | 1 到 50 项 | 按 EtherCAT 总线物理顺序排列的从站 |
 | `slaves[].id` | 无符号 16 位整数 | 从 `0` 连续递增，必须等于序列下标 | 从站编号及物理位置 |
 | `slaves[].name` | 字符串 | 非空，最多 79 字节 | 终端和共享内存中显示的从站名称 |
+| `slaves[].dc` | 映射 | 可选 | 当前从站的设备特定 Distributed Clocks 配置 |
+| `slaves[].dc.assign_activate` | 无符号 16 位整数 | 必填且非零 | 设备 XML 中的 `Device -> Dc -> AssignActivate` 值 |
+| `slaves[].dc.sync0_shift_ns` | 有符号 32 位整数 | 可选，默认 `0` | SYNC0 相位偏移，单位 ns |
+| `slaves[].dc.sync1_cycle_ns` | 无符号 32 位整数 | 可选，默认 `0` | SYNC1 周期，`0` 表示不使用 SYNC1 |
+| `slaves[].dc.sync1_shift_ns` | 有符号 32 位整数 | 可选，默认 `0` | SYNC1 相位偏移，单位 ns |
+| `slaves[].dc.reference` | 布尔值 | 可选，默认 `false` | 是否作为本主站 DC 参考时钟 |
 | `slaves[].rx_pdos` | 序列 | 非空 | 从站接收、主站输出的 PDO 列表 |
 | `slaves[].tx_pdos` | 序列 | 非空 | 从站发送、主站输入的 PDO 列表 |
 | `rx_pdos[].index` / `tx_pdos[].index` | 无符号 16 位整数 | `0` 到 `0xFFFF` | PDO 映射对象索引 |
@@ -75,8 +83,40 @@ slaves:
 | `entries[].bit_length` | 无符号 8 位整数 | `8` 到 `248`，且为 8 的倍数 | PDO 条目位宽 |
 
 整数可以写成十进制或带 `0x` 前缀的十六进制，不得添加引号、正负号或空白。
-所有字段都是必填字段，重复字段和未在上表列出的字段都会被拒绝，以避免
-歧义或拼写错误被静默忽略。
+除明确标为可选的 DC 字段外，所有字段都是必填字段。重复字段和未在上表列出
+的字段都会被拒绝，以避免歧义或拼写错误被静默忽略。
+
+## Distributed Clocks
+
+DC 默认关闭。只有命令行指定 `--dc on` 时，主站才应用 YAML 中的 `dc`
+配置。启用后至少需要一个带 `dc` 块的从站，并且必须且只能有一个从站设置
+`reference: true`。不带 `dc` 块的从站可以继续存在于同一总线上。
+
+SYNC0 周期固定由 `--period-us * 1000` 得到，YAML 不允许覆盖，从而避免主站
+周期和从站同步周期不一致。若换算结果超过 IgH `uint32_t` 纳秒范围，启动参数
+校验失败。
+
+以下仅展示格式；`assign_activate` 和相位值必须从目标设备厂商 XML/ESI 获取，
+不得直接把示例值用于真实设备：
+
+```yaml
+slaves:
+  - id: 0
+    name: DC Reference Drive
+    dc:
+      assign_activate: 0x0300  # 示例值，不是通用值
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+      reference: true
+    rx_pdos: # ...
+    tx_pdos: # ...
+```
+
+启用 DC 后，配置从站或选择参考时钟失败会中止启动；运行期间 application
+time、参考时钟或从站时钟同步调用失败会停止周期循环并返回 `EIO`。
+`config/pdo.yaml` 使用 `ZeroErr Driver_V3.2.0.xml` 中的 DC 模式参数；
+`config/talon_pdo.yaml` 未写入未经验证的设备 DC 参数。
 
 每个从站的所有 `rx_pdos` 条目总数不能超过 `MAX_PDOUTPUT_NUM`（当前为
 25），所有 `tx_pdos` 条目总数不能超过 `MAX_PDINPUT_NUM`（当前为 25）。

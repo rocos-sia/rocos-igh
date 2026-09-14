@@ -188,6 +188,10 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         if (clock_gettime(CLOCK_MONOTONIC, &wake_time) != 0) {
             return errno;
         }
+        if (!master_.setApplicationTime(
+                static_cast<std::uint64_t>(toNanoseconds(wake_time)))) {
+            return EIO;
+        }
 
         statistics_.current_us = elapsedMicroseconds(last_wake, wake_time);
 
@@ -204,7 +208,9 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             updateSharedBus(state, statistics_, period_us_, toMicroseconds(wake_time), *ipc_.ecatBus);
         }
 
-        master_.queueAndSend();
+        if (!master_.queueAndSend()) {
+            return EIO;
+        }
         (void)ipc_.notifyClients();
 
         std::uint64_t missed = 0U;
