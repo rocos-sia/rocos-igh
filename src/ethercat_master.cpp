@@ -4,9 +4,11 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 namespace rocos {
 
@@ -60,6 +62,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
                                 std::uint32_t period_us,
                                 std::string &error) {
     error.clear();
+    last_dc_error_ = DcError{};
 
     if (initialized_) {
         error = "master already initialized";
@@ -113,9 +116,6 @@ bool EthercatMaster::initialize(unsigned int master_id,
     ec_slave_config_t *reference_clock_config = nullptr;
     for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
         SlaveSpec &slave = config.slaves[slave_index];
-        if (slave.vendor_id != 0) {
-            continue;
-        }
 
         ec_slave_info_t slave_info{};
         if (ecrt_master_get_slave(master_, slave.position, &slave_info) != 0) {
@@ -123,17 +123,52 @@ bool EthercatMaster::initialize(unsigned int master_id,
             reset();
             return false;
         }
-        if (!applyDiscoveredIdentity(slave, slave_info.vendor_id, slave_info.product_code, error)) {
-            error += " for slave[" + std::to_string(slave_index) + "]";
-            reset();
-            return false;
-        }
-        // Verify the identity was actually written before passing it to IgH.
-        if (slave.vendor_id == 0 || slave.product_code == 0) {
-            error = "SII identity for slave[" + std::to_string(slave_index) +
-                    "] is still zero after discovery";
-            reset();
-            return false;
+
+        if (slave.vendor_id == 0) {
+            // Auto-discover identity from SII.
+            if (!applyDiscoveredIdentity(slave, slave_info.vendor_id, slave_info.product_code, error)) {
+                error += " for slave[" + std::to_string(slave_index) + "]";
+                reset();
+                return false;
+            }
+            if (slave.vendor_id == 0 || slave.product_code == 0) {
+                error = "SII identity for slave[" + std::to_string(slave_index) +
+                        "] is still zero after discovery";
+                reset();
+                return false;
+            }
+        } else {
+            // Cross-check configured identity against what the bus actually reports.
+            if (slave_info.vendor_id != slave.vendor_id ||
+                slave_info.product_code != slave.product_code) {
+                error = "SII identity mismatch for slave[" + std::to_string(slave_index) +
+                        "]: configured vendor_id=0x" +
+                        [](std::uint32_t v) {
+                            char buf[12];
+                            std::snprintf(buf, sizeof(buf), "%08X", v);
+                            return std::string(buf);
+                        }(slave.vendor_id) +
+                        " product_code=0x" +
+                        [](std::uint32_t v) {
+                            char buf[12];
+                            std::snprintf(buf, sizeof(buf), "%08X", v);
+                            return std::string(buf);
+                        }(slave.product_code) +
+                        ", SII reports vendor_id=0x" +
+                        [](std::uint32_t v) {
+                            char buf[12];
+                            std::snprintf(buf, sizeof(buf), "%08X", v);
+                            return std::string(buf);
+                        }(slave_info.vendor_id) +
+                        " product_code=0x" +
+                        [](std::uint32_t v) {
+                            char buf[12];
+                            std::snprintf(buf, sizeof(buf), "%08X", v);
+                            return std::string(buf);
+                        }(slave_info.product_code);
+                reset();
+                return false;
+            }
         }
     }
 
@@ -271,9 +306,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
     if (!activateWithInitialApplicationTime(
             dc_runtime.enabled, error, read_application_time,
             apply_application_time, activate_master)) {
-        const DcError dc_error = last_dc_error_;
         reset();
-        last_dc_error_ = dc_error;
         return false;
     }
 
@@ -323,9 +356,19 @@ bool EthercatMaster::waitForSlavesInPreop(
     const std::function<void()> &wait,
     std::size_t max_attempts) {
     error.clear();
-    std::size_t pending_slave = 0;
-    ec_slave_info_t pending_info{};
     std::size_t stable_count = 0;
+
+    // Keep the last-seen info for every slave so the timeout message can report
+    // all of them rather than only the final one visited in the scan loop.
+    struct PendingEntry {
+        std::size_t index;
+        ec_slave_info_t info;
+    };
+    std::vector<PendingEntry> pending(config.slave_count);
+    for (std::size_t i = 0; i < config.slave_count; ++i) {
+        pending[i].index = i;
+        pending[i].info = {};
+    }
 
     for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
         bool all_ready = true;
@@ -336,10 +379,9 @@ bool EthercatMaster::waitForSlavesInPreop(
                 error = "failed to read state for slave[" + std::to_string(slave_index) + "]";
                 return false;
             }
+            pending[slave_index].info = slave_info;
             if (!slaveReadyForConfiguration(slave_info)) {
                 all_ready = false;
-                pending_slave = slave_index;
-                pending_info = slave_info;
             }
         }
 
@@ -362,11 +404,17 @@ bool EthercatMaster::waitForSlavesInPreop(
         }
     }
 
-    error = "timed out waiting for slave[" + std::to_string(pending_slave) +
-            "] to reach PREOP (al_state=" +
-            std::to_string(static_cast<unsigned int>(pending_info.al_state)) +
-            ", error_flag=" +
-            std::to_string(static_cast<unsigned int>(pending_info.error_flag)) + ")";
+    // Build a message listing every slave that is still not ready.
+    error = "timed out waiting for slaves to reach PREOP:";
+    for (const PendingEntry &entry : pending) {
+        if (!slaveReadyForConfiguration(entry.info)) {
+            error += " slave[" + std::to_string(entry.index) +
+                     "](al_state=" +
+                     std::to_string(static_cast<unsigned int>(entry.info.al_state)) +
+                     ",error_flag=" +
+                     std::to_string(static_cast<unsigned int>(entry.info.error_flag)) + ")";
+        }
+    }
     return false;
 }
 
@@ -531,7 +579,6 @@ void EthercatMaster::reset() noexcept {
     input_domain_ = nullptr;
     output_domain_ = nullptr;
     dc_enabled_ = false;
-    last_dc_error_ = DcError{};
     initialized_ = false;
 
     if (master_ != nullptr) {
