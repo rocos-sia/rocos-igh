@@ -3,6 +3,12 @@ version: 1
 slaves:
   - id: 0
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+      reference: true
     rx_pdos:
       - index: 0x1607
         entries:
@@ -23,6 +29,11 @@ slaves:
 
   - id: 1
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
@@ -43,6 +54,11 @@ slaves:
 
   - id: 2
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
@@ -63,6 +79,11 @@ slaves:
 
   - id: 3
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
@@ -83,6 +104,11 @@ slaves:
 
   - id: 4
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
@@ -103,6 +129,11 @@ slaves:
 
   - id: 5
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
@@ -123,6 +154,11 @@ slaves:
 
   - id: 6
     name: Elmo Twitter Drive
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
     rx_pdos:
       - index: 0x1607
         entries:
