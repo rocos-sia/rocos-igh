@@ -215,6 +215,11 @@ public:
 
         const std::string shm_name = toPosixName(ecmName);
 
+        // Unlink any stale object left by a previous crash so O_EXCL succeeds.
+        if (shm_unlink(shm_name.c_str()) == 0) {
+            print_message("[SHM] Removed stale " + shm_name + " from a previous run", MessageLevel::WARNING);
+        }
+
         ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (ecm_fd_ < 0) {
             print_message("[SHM] Cannot create " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
@@ -237,9 +242,13 @@ public:
 
         for (int i = 0; i < EC_SEM_NUM; i++) {
             const std::string semName = semaphoreName(i);
+            // Unlink any stale semaphore left by a previous crash.
+            if (sem_unlink(semName.c_str()) == 0) {
+                print_message("[SHM] Removed stale semaphore " + semName + " from a previous run", MessageLevel::WARNING);
+            }
             sem_mutex[i] = sem_open(semName.c_str(), O_CREAT | O_EXCL, 0660, 0);
             if (sem_mutex[i] == SEM_FAILED) {
-                print_message("[SHM] Cannot create semaphore " + semName, MessageLevel::ERROR);
+                print_message("[SHM] Cannot create semaphore " + semName + ": " + std::strerror(errno), MessageLevel::ERROR);
                 rollbackCreatedSemaphores(i);
                 rollbackOwnedEcm();
                 umask(mask); return false;
@@ -267,6 +276,14 @@ public:
 
         const std::string pd_in  = toPosixName(pdInputName);
         const std::string pd_out = toPosixName(pdOutputName);
+
+        // Unlink any stale objects left by a previous crash so O_EXCL succeeds.
+        if (shm_unlink(pd_in.c_str()) == 0) {
+            print_message("[SHM] Removed stale " + pd_in + " from a previous run", MessageLevel::WARNING);
+        }
+        if (shm_unlink(pd_out.c_str()) == 0) {
+            print_message("[SHM] Removed stale " + pd_out + " from a previous run", MessageLevel::WARNING);
+        }
 
         pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
         if (pd_input_fd_ < 0) {
