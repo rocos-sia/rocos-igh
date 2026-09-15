@@ -44,3 +44,12 @@ add_custom_command(TARGET shm_web_server POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/AlibabaPuHuiTi-3-55-Regular.woff2"
         "$<TARGET_FILE_DIR:shm_web_server>/AlibabaPuHuiTi-3-55-Regular.woff2"
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(shm_web_output_test output_write_test.cpp)
+    target_include_directories(shm_web_output_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
+    target_compile_options(shm_web_output_test PRIVATE -Wall -Wextra)
+    target_link_libraries(shm_web_output_test PRIVATE Threads::Threads rt)
+    add_test(NAME shm_web_output COMMAND shm_web_output_test)
+endif()

@@ -8,7 +8,7 @@
 
 - `shm_web_server.cpp` —— HTTP 后端：静态文件 + `/api/snapshot`（JSON 快照）+ `/api/events`（SSE 推送）。
 - `index.html` —— 前端单页：总线状态卡片、周期统计、每个从站的输入/输出 PDO 变量实时值。
-- `value_decoder.mjs` —— 小端 PDO 数据类型解析，供浏览器页面与 Node.js 测试复用。
+- `value_decoder.mjs` —— 小端 PDO 数据类型解析与写入编码，供浏览器页面与 Node.js 测试复用。
 - `CMakeLists.txt` —— 构建脚本（独立于主工程，可单独编译）。
 
 ## 构建
@@ -59,6 +59,7 @@ sudo ./build-master/rocos_igh_master --master-id 0 --period-us 1000
 | `GET /` | 前端页面（加载可执行文件旁的 `index.html`） |
 | `GET /api/snapshot` | 当前共享内存快照（JSON） |
 | `GET /api/events` | SSE 流，约每 250 ms 推送一帧快照 |
+| `POST /api/output` | 校验目标后单次写入 OUT PDO，返回成功或错误 JSON |
 
 ## 显示内容
 
@@ -75,7 +76,7 @@ sudo ./build-master/rocos_igh_master --master-id 0 --period-us 1000
 3. 前端用 `EventSource` 订阅 `/api/events`，后端每 250 ms 序列化一次快照推送。
 4. 观察器通过 `ecm{id}->timestamp` 是否变化来判断主站存活；主站退出后自动进入"等待"重连状态。
 
-> **注意**：观察器以只读客户端身份连接，不会创建/清理共享内存（`--demo` 模式除外——它自建并负责清理）。
+> **注意**：工具以客户端身份连接，可通过 OUT 写入按钮修改输出 PDO，不会创建/清理共享内存（`--demo` 模式除外——它自建并负责清理）。
 > 主站进程的共享内存由其自身在退出时 unlink；若主站被 `SIGKILL` 强杀，可能残留，需手动清理对应 `/dev/shm/` 对象。
 
 ### CiA 402 Status Word 标签
@@ -97,4 +98,36 @@ sudo ./build-master/rocos_igh_master --master-id 0 --period-us 1000
 
 ```bash
 node --test tools/shm_web/*.test.mjs
+```
+
+
+### OUT 字典写入
+
+OUT 行提供输入框和“写入”按钮（也可在输入框按 Enter）。先选择数据类型，再输入数值：
+
+- 整数支持十进制和 `0x` 十六进制；有符号类型可输入负数。
+- `FLOAT` 支持小数和科学计数法；所有类型均检查格式和范围，拒绝越界截断。
+- 仅支持 1、2、4 字节的已映射 OUT 字典；IN 和 `0000.0` 填充项没有写入入口。
+- 点击后将小端字节**写入一次** `pd_output{master_id}`；不持续锁定数值，其他客户端可能覆盖。
+  页面提示的是共享内存写入结果，不代表驱动器已经执行。实时快照用于查看后续值。
+- 刷新实时数据不会覆盖正在输入的内容；请求期间禁止重复提交，断线时禁用写入。
+- 演示模式第一次写入后停止 OUT 动画，保留输出值，IN 动画继续运行。
+
+后端重新核对主站 ID、从站 ID、OUT 字典索引/子索引、偏移、大小及实际映射边界；
+未连接或主站数据已过期时拒绝写入。保持现有共享 ABI 和主站周期路径不变。
+现有 ABI 没有跨进程写入事务；多个客户端同时写同一 OUT 时没有互斥保证。
+真实主站会在周期内读取输出，因此写入目标位置、控制字等可能直接影响设备。
+使用 `--host 0.0.0.0` 时，可访问该端口的客户端也具有写入能力，应仅在受信网络开放。
+
+接口请求头要求 `X-Rocos-Write: 1` 和有效的 `Content-Length`，拒绝浏览器跨来源写入。
+请求体为以空格分隔的 `master_id slave_id index sub_index offset size hexbytes`，
+前六项是非负十进制整数，末项是严格匹配字节长度的小端十六进制数据。
+成功返回 `{"ok":true}`；失败返回非 2xx 状态及 `{"error":"原因"}`。
+
+后端无硬件测试（匿名映射及本地 socketpair，不接触真实共享内存）：
+
+```bash
+cmake -S tools/shm_web -B tools/shm_web/build
+cmake --build tools/shm_web/build
+ctest --test-dir tools/shm_web/build --output-on-failure
 ```

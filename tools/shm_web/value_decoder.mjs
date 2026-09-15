@@ -74,3 +74,28 @@ export function decodeStatusWord(variable) {
   const detail = `CiA 402: ${tags[0].label}`;
   return { word, tags, detail };
 }
+
+
+export function encodeValue(text, type) {
+  const spec = {
+    UINT8: [1, 0, 255, 'setUint8'], INT8: [1, -128, 127, 'setInt8'],
+    UINT16: [2, 0, 65535, 'setUint16'], INT16: [2, -32768, 32767, 'setInt16'],
+    UINT32: [4, 0, 4294967295, 'setUint32'], INT32: [4, -2147483648, 2147483647, 'setInt32'],
+    FLOAT: [4, -3.4028234663852886e38, 3.4028234663852886e38, 'setFloat32'],
+  }[type];
+  if (!spec) throw new Error('不支持的数据类型');
+  const input = text.trim();
+  const pattern = type === 'FLOAT'
+    ? /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/
+    : /^(?:[+-]?\d+|0[xX][0-9a-fA-F]+)$/;
+  if (!pattern.test(input)) throw new Error('请输入有效数值；整数支持十进制或 0x 十六进制');
+  const value = Number(input);
+  const [size, min, max, setter] = spec;
+  if (!Number.isFinite(value) || value < min || value > max
+      || (type !== 'FLOAT' && !Number.isInteger(value))) {
+    throw new Error(`${type} 范围：${min} ～ ${max}`);
+  }
+  const bytes = new Uint8Array(size);
+  new DataView(bytes.buffer)[setter](0, value, true);
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}

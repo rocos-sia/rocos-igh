@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   compatibleTypeForSize,
   decodeValue,
+  encodeValue,
   decodeStatusWord,
   formatTypedBytes,
   typesForSize,
@@ -106,4 +107,23 @@ test('recognizes object identity, validates width and rejects malformed bytes', 
   for (const override of [{ size: 4 }, { bytes: '' }, { bytes: '27' }, { bytes: '270000' }, { bytes: 'zzzz' }]) {
     assert.equal(decodeStatusWord({ ...variable, ...override }).tags[0].label, '状态字数据无效');
   }
+});
+
+
+test('encodes supported OUT types as little-endian bytes without truncation', () => {
+  for (const [text, type, hex] of [
+    ['255', 'UINT8', 'ff'], ['-128', 'INT8', '80'],
+    ['0x1234', 'UINT16', '3412'], ['-32768', 'INT16', '0080'],
+    ['4294967295', 'UINT32', 'ffffffff'], ['-2147483648', 'INT32', '00000080'],
+    ['1.5', 'FLOAT', '0000c03f'], ['-1.25e2', 'FLOAT', '0000fac2'],
+  ]) assert.equal(encodeValue(text, type), hex);
+});
+
+test('rejects malformed and out-of-range OUT values', () => {
+  for (const [text, type] of [
+    ['', 'UINT16'], ['12abc', 'UINT16'], ['1.5', 'INT16'], ['-1', 'UINT16'],
+    ['256', 'UINT8'], ['128', 'INT8'], ['65536', 'UINT16'], ['32768', 'INT16'],
+    ['4294967296', 'UINT32'], ['2147483648', 'INT32'], ['NaN', 'FLOAT'],
+    ['Infinity', 'FLOAT'], ['3.5e38', 'FLOAT'], ['0x12', 'FLOAT'], ['1', 'UNKNOWN'],
+  ]) assert.throws(() => encodeValue(text, type));
 });

@@ -182,17 +182,26 @@
   .slave-head .meta { color: var(--muted); font: 11px/1 var(--mono); }
 
   .table-scroll { width: 100%; overflow-x: auto; scrollbar-color: var(--border-strong) var(--panel-deep); }
-  table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+  table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
   th, td { overflow: hidden; padding: 9px 12px; border-bottom: 1px solid var(--border); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
   th {
     position: sticky; top: 0; z-index: 1; color: var(--muted);
     background: var(--panel-deep); font: 600 10px/1.2 var(--mono); text-transform: uppercase;
   }
   th:nth-child(1) { width: 72px; }
-  th:nth-child(2) { width: 24%; }
+  th:nth-child(2) { width: 18%; }
   th:nth-child(3) { width: 116px; }
   th:nth-child(4), th:nth-child(5) { width: 78px; }
   th:nth-child(7) { width: 120px; }
+  th:nth-child(8) { width: 240px; }
+  .output-editor { display: flex; flex-wrap: wrap; gap: 6px; }
+  .output-editor input { width: 135px; min-height: 28px; padding: 4px 7px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: var(--panel); color: var(--text); font: 12px var(--mono); }
+  .output-editor button { padding: 4px 8px; border: 1px solid var(--accent); border-radius: 4px;
+    background: var(--accent); color: #fff; cursor: pointer; }
+  .output-editor button:disabled { opacity: .5; cursor: default; }
+  .output-editor input:focus-visible, .output-editor button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .write-result { width: 100%; white-space: normal; font: 11px/1.4 var(--ui); color: var(--muted); }
   tbody tr { transition: background-color 120ms ease; }
   tbody tr:hover { background: var(--row-hover); }
   tbody tr:last-child td { border-bottom: 0; }
@@ -324,12 +333,14 @@
 </div>
 
 <script type="module">
-import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
+import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
 
 (() => {
   const $ = id => document.getElementById(id);
   const fmt = n => (typeof n === 'number' && isFinite(n)) ? n.toLocaleString() : '—';
   const selectedTypes = new Map();
+  let currentMasterId = null;
+  let canWrite = false;
 
   function applyTheme(theme) {
     const dark = theme === 'dark';
@@ -378,7 +389,7 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
     const key = variableKey(slaveId, direction, variable);
     const tagClass = direction === 'out' ? 'out' : 'in';
     const tagText = direction.toUpperCase();
-    return `<tr data-key="${key}" data-bytes="${variable.bytes}">
+    return `<tr data-key="${key}" data-bytes="${variable.bytes}" data-size="${variable.size}">
       <td><span class="tag ${tagClass}">${tagText}</span></td>
       <td>${variable.name}</td>
       <td class="mono">${variable.index}.${variable.sub_index}</td>
@@ -386,6 +397,8 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
       <td class="mono">${variable.size} B</td>
       <td class="bytes"><div class="value-with-status"><span class="raw-value">${renderVariableValue(key, variable)}</span><span class="status-tags">${renderStatusTags(variable)}</span></div></td>
       <td>${renderTypeSelector(key, variable.size)}</td>
+      <td>${direction === 'out' && typesForSize(variable.size).length && Number.parseInt(variable.index, 16) !== 0
+        ? '<form class="output-editor"><input name="value" type="text" autocomplete="off" aria-label="OUT 写入值" placeholder="指定数值 / 0x…" required><button type="submit">写入</button><span class="write-result" role="status"></span></form>' : '—'}</td>
     </tr>`;
   }
 
@@ -451,7 +464,7 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
         </div>
         <div class="table-scroll">
           <table>
-            <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th><th>数据类型</th></tr></thead>
+            <thead><tr><th>方向</th><th>变量名</th><th>Index</th><th>偏移</th><th>大小</th><th>实时值</th><th>数据类型</th><th>OUT 写入（单次）</th></tr></thead>
             <tbody>`;
       for (const v of slave.output_vars) {
         html += renderVariableRow(slave.id, 'out', v);
@@ -481,9 +494,18 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
     }
   }
 
+  function setWriteEnabled(enabled) {
+    canWrite = enabled;
+    for (const button of $('slaves').querySelectorAll('.output-editor button')) {
+      button.disabled = !enabled || button.closest('form').dataset.pending === 'true';
+    }
+  }
+
   function handle(snapshot) {
+    currentMasterId = snapshot.master_id;
     setText('masterid', snapshot.master_id ?? '—');
     if (!snapshot.available) {
+      setWriteEnabled(false);
       $('slaves').innerHTML = '<div class="empty">' + (snapshot.error || '共享内存不可用') + '</div>';
       delete $('slaves').dataset.schema;
       updateStatus(false, snapshot.demo, snapshot.error);
@@ -494,7 +516,45 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
     updateStatus(true, snapshot.demo);
     renderBus(snapshot);
     renderSlaves(snapshot);
+    setWriteEnabled(true);
   }
+
+  $('slaves').addEventListener('submit', async event => {
+    const form = event.target.closest('.output-editor');
+    if (!form) return;
+    event.preventDefault();
+    if (form.dataset.pending === 'true') return;
+    const result = form.querySelector('.write-result');
+    const row = form.closest('tr');
+    const button = form.querySelector('button');
+    try {
+      if (!canWrite) throw new Error('连接不可用，无法写入');
+      const [slave, direction, index, sub, offset] = row.dataset.key.split(':');
+      if (direction !== 'out') throw new Error('仅允许写入 OUT');
+      const bytes = encodeValue(form.elements.value.value, row.querySelector('.data-type').value);
+      const body = [currentMasterId, slave, Number.parseInt(index, 16), sub, offset, row.dataset.size, bytes].join(' ');
+      form.dataset.pending = 'true';
+      button.disabled = true;
+      result.textContent = '写入中…';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      let response;
+      try {
+        response = await fetch('/api/output', {
+          method: 'POST', headers: { 'Content-Type': 'text/plain', 'X-Rocos-Write': '1' },
+          body, signal: controller.signal,
+        });
+        const reply = await response.json();
+        if (!response.ok) throw new Error(reply.error || '写入失败');
+        result.textContent = '已写入 ' + bytes.toUpperCase() + '；以实时值为准';
+      } finally { clearTimeout(timeout); }
+    } catch (error) {
+      result.textContent = error.name === 'AbortError' ? '请求超时，结果未确认，请查看实时值' : error.message;
+    } finally {
+      delete form.dataset.pending;
+      button.disabled = !canWrite;
+    }
+  });
 
   $('slaves').addEventListener('change', event => {
     const select = event.target.closest('select.data-type');
@@ -513,11 +573,13 @@ import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize
     };
     es.onerror = () => {
       // EventSource 会自动重连；切换为等待状态。
+      setWriteEnabled(false);
       $('dot').className = 'dot waiting';
       $('statustext').textContent = '连接中断，重连中…';
     };
   } else {
     const poll = () => fetch('/api/snapshot').then(r => r.json()).then(handle).catch(() => {
+      setWriteEnabled(false);
       updateStatus(false, false, '无法连接服务器');
     });
     poll();

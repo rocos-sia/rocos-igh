@@ -86,3 +86,61 @@ test('renders and refreshes status tags while type changes preserve them', () =>
   assert.equal(cells['.raw-value'].textContent, '-');
   assert.match(cells['.status-tags'].innerHTML, /状态字数据无效/);
 });
+
+
+test('only mapped supported OUT rows have an editor and updates preserve input', () => {
+  const context = vm.createContext({ ...decoder, selectedTypes: new Map() });
+  vm.runInContext(html.slice(html.indexOf('  function renderTypeSelector'), html.indexOf('  function setText')), context);
+  const variable = { index: '607A', sub_index: 0, size: 4, offset: 0, bytes: '00000000', name: 'Target Position' };
+  assert.match(context.renderVariableRow(0, 'out', variable), /form class="output-editor"/);
+  assert.doesNotMatch(context.renderVariableRow(0, 'in', variable), /form class="output-editor"/);
+  assert.doesNotMatch(context.renderVariableRow(0, 'out', { ...variable, index: '0000' }), /form class="output-editor"/);
+  assert.doesNotMatch(context.renderVariableRow(0, 'out', { ...variable, size: 3 }), /form class="output-editor"/);
+  const cells = { '.raw-value': {}, '.status-tags': {} };
+  // Any attempt to replace the row or touch the editor during a snapshot fails here.
+  const row = { dataset: {}, querySelector: selector => { assert.ok(selector in cells); return cells[selector]; } };
+  context.updateVariableRow({ querySelector: () => row }, 0, 'out', { ...variable, bytes: '01000000' });
+  assert.equal(cells['.raw-value'].textContent, '01 00 00 00 = 1');
+});
+
+test('OUT form submits typed bytes once with exact target and reports failures', async () => {
+  const result = { textContent: '' };
+  const button = { disabled: false };
+  const row = {
+    dataset: { key: '2:out:607A:0:14', size: '4' },
+    querySelector: () => ({ value: 'INT32' }),
+  };
+  const form = {
+    dataset: {}, elements: { value: { value: '-123' } },
+    closest: () => row,
+    querySelector: selector => selector === 'button' ? button : result,
+  };
+  const calls = [];
+  const context = vm.createContext({
+    ...decoder, currentMasterId: 7, canWrite: true, AbortController, setTimeout, clearTimeout,
+    $: () => ({ addEventListener: (_, handler) => { context.submit = handler; } }),
+    fetch: async (url, options) => { calls.push({ url, ...options }); return { ok: true, json: async () => ({ ok: true }) }; },
+  });
+  vm.runInContext(html.slice(html.indexOf("  $('slaves').addEventListener('submit'"), html.indexOf("  $('slaves').addEventListener('change'")), context);
+  const event = { target: { closest: () => form }, preventDefault() {} };
+  await context.submit(event);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/output');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].headers['X-Rocos-Write'], '1');
+  assert.equal(calls[0].body, '7 2 24698 0 14 4 85ffffff');
+  assert.match(result.textContent, /已写入/);
+  assert.equal(button.disabled, false);
+  form.elements.value.value = '2147483648';
+  await context.submit(event);
+  assert.equal(calls.length, 1);
+  assert.match(result.textContent, /范围/);
+  form.elements.value.value = '123';
+  context.fetch = async () => ({ ok: false, json: async () => ({ error: '配置已改变' }) });
+  await context.submit(event);
+  assert.equal(result.textContent, '配置已改变');
+  context.canWrite = false;
+  await context.submit(event);
+  assert.match(result.textContent, /连接不可用/);
+  assert.equal(button.disabled, true);
+});

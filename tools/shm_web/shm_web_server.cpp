@@ -17,12 +17,17 @@
 //   GET /              前端页面（index.html，从可执行文件旁加载）
 //   GET /api/snapshot  当前共享内存快照（JSON）
 //   GET /api/events    SSE 流，周期推送快照
+//   POST /api/output   校验后单次写入 OUT PDO
 // =============================================================================
 
 #include "shared_memory_config.hpp"
 
 #include <arpa/inet.h>
 #include <chrono>
+#include <array>
+#include <charconv>
+#include <map>
+#include <cctype>
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
@@ -61,6 +66,7 @@ constexpr int kStaleUs        = kStaleMs * 1000;
 struct AppState {
     int master_id = 0;
     bool demo     = false;
+    bool demo_output_written = false;
 
     std::mutex mtx;
     std::unique_ptr<SharedMemoryConfig> cfg;  // 客户端连接（或 demo 模式下自建）
@@ -274,6 +280,8 @@ void animateDemo(AppState &st) {
     put32le(in, 12, pos / 10);           // Auxiliary Position Value
     put16le(in, 16, static_cast<int16_t>(n % 1000));  // Analog Input
 
+    if (st.demo_output_written) return;  // 保留用户写入的输出，输入动画继续。
+
     // 输出（真实场景由客户端写入，这里写出跟随值演示回读）：
     put32le(out,  0, pos);               // Target Position
     put32le(out,  4, vel);               // Target Velocity
@@ -305,6 +313,8 @@ std::string renderSnapshot(AppState &st) {
             st.last_attempt = now;
             if (st.cfg && st.cfg->getSharedMemory() && st.cfg->getPdDataMemoryProvider()) {
                 st.connected = true;
+                st.last_ts = st.cfg->ecatBus->timestamp;
+                st.last_seen_ts = now;
             }
         }
     } else if (!st.demo && st.cfg && st.cfg->ecatBus != nullptr) {
@@ -399,8 +409,7 @@ std::string response(int status, const std::string &status_text,
     if (!(body.empty() && keep_alive)) {
         o << "Content-Length: " << body.size() << "\r\n";
     }
-    o << "Cache-Control: no-cache\r\n"
-      << "Access-Control-Allow-Origin: *\r\n";
+    o << "Cache-Control: no-cache\r\n";
     if (keep_alive) {
         o << "Connection: keep-alive\r\n"
           << "X-Accel-Buffering: no\r\n";
@@ -433,10 +442,111 @@ bool parseRequest(const std::string &raw, std::string &method, std::string &targ
     if (line_end == std::string::npos) return false;
     std::istringstream line(raw.substr(0, line_end));
     line >> method >> target;
-    return method == "GET";
+    return method == "GET" || method == "POST";
+}
+
+bool parseUnsigned(const std::string &text, unsigned int &value) {
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    return !text.empty() && parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+}
+
+std::string writeOutput(AppState &st, const std::string &body) {
+    // Wire format: master slave index(decimal) subindex offset size hexbytes.
+    std::istringstream input(body);
+    std::array<unsigned int, 6> fields{};
+    std::string token, hex, trailing;
+    for (auto &field : fields) {
+        if (!(input >> token) || !parseUnsigned(token, field)) return "写入参数无效";
+    }
+    if (!(input >> hex) || (input >> trailing)) return "写入参数无效";
+    const auto [master, slave_id, index, sub, offset, size] = fields;
+    if (master != static_cast<unsigned int>(st.master_id)) return "主站 ID 不匹配";
+    if (slave_id >= MAX_SLAVE_NUM || index == 0 || index > 0xffff || sub > 0xff
+        || (size != 1 && size != 2 && size != 4) || hex.size() != size * 2) return "字典地址或长度无效";
+    std::array<unsigned char, 4> bytes{};
+    for (unsigned int i = 0; i < size; ++i) {
+        unsigned int byte = 0;
+        const auto parsed = std::from_chars(hex.data() + i * 2, hex.data() + i * 2 + 2, byte, 16);
+        if (parsed.ec != std::errc{} || parsed.ptr != hex.data() + i * 2 + 2) return "字节数据无效";
+        bytes[i] = static_cast<unsigned char>(byte);
+    }
+
+    std::lock_guard<std::mutex> lk(st.mtx);
+    if (!st.connected || !st.cfg || !st.cfg->ecatBus || !st.cfg->pdOutputPtr) return "共享内存未连接";
+    if (!st.demo && std::chrono::steady_clock::now() - st.last_seen_ts > std::chrono::milliseconds(kStaleMs)) {
+        return "主站数据已过期，请等待重新连接";
+    }
+    const EcatBus &bus = *st.cfg->ecatBus;
+    if (bus.slave_num < 0 || bus.slave_num > MAX_SLAVE_NUM) return "从站数量无效";
+    const PdVar *match = nullptr;
+    for (int s = 0; s < bus.slave_num; ++s) {
+        const Slave &slave = bus.slaves[s];
+        if (slave.id != static_cast<int>(slave_id)) continue;
+        if (slave.output_var_num < 0 || slave.output_var_num > MAX_PDOUTPUT_NUM) return "OUT 数量无效";
+        for (int v = 0; v < slave.output_var_num; ++v) {
+            const PdVar &var = slave.output_vars[v];
+            if (var.index == index && var.sub_index == sub && var.offset >= 0
+                && static_cast<unsigned int>(var.offset) == offset && var.size == static_cast<int>(size)) {
+                if (match) return "OUT 字典地址不唯一";
+                match = &var;
+            }
+        }
+    }
+    if (!match) return "OUT 字典不存在或配置已改变";
+    const auto capacity = st.cfg->pd_output_size_;
+    if (offset > capacity || size > capacity - offset) return "OUT 写入超出映射范围";
+    std::memcpy(static_cast<unsigned char *>(st.cfg->pdOutputPtr) + offset, bytes.data(), size);
+    st.demo_output_written = true;
+    return "";
+}
+
+// Read a bounded POST body, rejecting ambiguous framing and cross-origin browser writes.
+void handleOutputRequest(int fd, AppState &st, std::string raw) {
+    auto reply = [fd](int status, const std::string &error) {
+        const auto body = error.empty() ? "{\"ok\":true}" : "{\"error\":\"" + jsonEscape(error) + "\"}";
+        const auto r = response(status, status == 200 ? "OK" : "Bad Request", "application/json; charset=utf-8", body);
+        ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
+        close(fd);
+    };
+    const auto end = raw.find("\r\n\r\n");
+    std::map<std::string, std::string> headers;
+    std::size_t pos = raw.find("\r\n") + 2;
+    while (pos < end) {
+        const auto next = raw.find("\r\n", pos);
+        const auto colon = raw.find(':', pos);
+        if (colon == std::string::npos || colon >= next) { reply(400, "请求头无效"); return; }
+        auto name = raw.substr(pos, colon - pos);
+        for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto value = raw.substr(colon + 1, next - colon - 1);
+        const auto first = value.find_first_not_of(" \t");
+        value = first == std::string::npos ? "" : value.substr(first, value.find_last_not_of(" \t") - first + 1);
+        if (!headers.emplace(name, value).second) { reply(400, "重复请求头"); return; }
+        pos = next + 2;
+    }
+    unsigned int length = 0;
+    if (headers["x-rocos-write"] != "1" || headers.count("transfer-encoding")
+        || !parseUnsigned(headers["content-length"], length) || length == 0 || length > 256) {
+        reply(400, "写入请求头或长度无效"); return;
+    }
+    if ((headers.count("sec-fetch-site") && headers["sec-fetch-site"] != "same-origin")
+        || (headers.count("origin") && headers["origin"] != "http://" + headers["host"])) {
+        reply(403, "不允许跨来源写入"); return;
+    }
+    const std::size_t body_start = end + 4;
+    while (raw.size() < body_start + length) {
+        char buf[256];
+        const auto n = ::recv(fd, buf, std::min(sizeof(buf), body_start + length - raw.size()), 0);
+        if (n <= 0) { reply(400, "写入请求不完整"); return; }
+        raw.append(buf, static_cast<std::size_t>(n));
+    }
+    if (raw.size() != body_start + length) { reply(400, "写入长度不匹配"); return; }
+    const auto error = writeOutput(st, raw.substr(body_start, length));
+    reply(error.empty() ? 200 : 400, error);
 }
 
 void handleConnection(int fd, AppState &st, const std::string &argv0) {
+    const timeval timeout{5, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     std::string raw;
     raw.reserve(4096);
     char buf[4096];
@@ -456,6 +566,14 @@ void handleConnection(int fd, AppState &st, const std::string &argv0) {
     }
 
     const auto path = target.substr(0, target.find('?'));
+
+    if (method == "POST") {
+        if (path == "/api/output") { handleOutputRequest(fd, st, std::move(raw)); return; }
+        const auto r = response(405, "Method Not Allowed", "text/plain", "method not allowed");
+        ::send(fd, r.data(), r.size(), MSG_NOSIGNAL);
+        close(fd);
+        return;
+    }
 
     if (path == "/" || path == "/index.html") {
         std::string html;
