@@ -197,6 +197,17 @@
   tbody tr:hover { background: var(--row-hover); }
   tbody tr:last-child td { border-bottom: 0; }
   td.mono { font-family: var(--mono); }
+  .value-with-status, .status-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .raw-value { white-space: nowrap; }
+  .status-tags:empty { display: none; }
+  .status-tag { padding: 3px 6px; border: 1px solid currentColor; border-radius: 3px;
+    background: var(--panel-raised); font: 500 12px/1.3 var(--ui); white-space: nowrap; cursor: help; }
+  .status-ok { color: var(--ok); }
+  .status-warn { color: var(--warn); }
+  .status-bad { color: var(--bad); }
+  .status-info { color: var(--value-text); }
+  .status-muted { color: var(--muted); }
+  .status-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   td.bytes { color: var(--value-text); font: 600 12px/1.2 var(--mono); }
   select.data-type {
     width: 100%; min-width: 92px; min-height: 28px; padding: 4px 7px;
@@ -313,7 +324,7 @@
 </div>
 
 <script type="module">
-import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
+import { compatibleTypeForSize, decodeStatusWord, formatTypedBytes, typesForSize, variableKey } from './value_decoder.mjs';
 
 (() => {
   const $ = id => document.getElementById(id);
@@ -355,6 +366,14 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
       : (variable.bytes.match(/../g) || []).map(byte => byte.toUpperCase()).join(' ') || '-';
   }
 
+  function renderStatusTags(variable) {
+    const status = decodeStatusWord(variable);
+    if (!status) return '';
+    return status.tags.map(tag =>
+      `<span class="status-tag status-${tag.tone}" tabindex="0" title="${status.detail}" aria-label="${tag.label}: ${status.detail}">${tag.label}</span>`
+    ).join('');
+  }
+
   function renderVariableRow(slaveId, direction, variable) {
     const key = variableKey(slaveId, direction, variable);
     const tagClass = direction === 'out' ? 'out' : 'in';
@@ -365,7 +384,7 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
       <td class="mono">${variable.index}.${variable.sub_index}</td>
       <td class="mono">${variable.offset}</td>
       <td class="mono">${variable.size} B</td>
-      <td class="bytes">${renderVariableValue(key, variable)}</td>
+      <td class="bytes"><div class="value-with-status"><span class="raw-value">${renderVariableValue(key, variable)}</span><span class="status-tags">${renderStatusTags(variable)}</span></div></td>
       <td>${renderTypeSelector(key, variable.size)}</td>
     </tr>`;
   }
@@ -384,7 +403,8 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
     const row = container.querySelector(`tr[data-key="${key}"]`);
     if (!row) return;
     row.dataset.bytes = variable.bytes;
-    row.querySelector('.bytes').textContent = renderVariableValue(key, variable);
+    row.querySelector('.raw-value').textContent = renderVariableValue(key, variable);
+    row.querySelector('.status-tags').innerHTML = renderStatusTags(variable);
   }
 
   function setText(id, txt) { $(id).textContent = txt; }
@@ -481,7 +501,7 @@ import { compatibleTypeForSize, formatTypedBytes, typesForSize, variableKey } fr
     if (!select) return;
     selectedTypes.set(select.dataset.key, select.value);
     const row = select.closest('tr');
-    row.querySelector('.bytes').textContent = formatTypedBytes(row.dataset.bytes, select.value);
+    row.querySelector('.raw-value').textContent = formatTypedBytes(row.dataset.bytes, select.value);
   });
 
   // 优先用 SSE 实时流；不支持时退回定时轮询 /api/snapshot。

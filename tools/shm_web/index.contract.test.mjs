@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
+import * as decoder from './value_decoder.mjs';
 
 const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const cmake = readFileSync(new URL('./CMakeLists.txt', import.meta.url), 'utf8');
@@ -53,4 +55,34 @@ test('provides a persisted light and dark theme toggle', () => {
   assert.match(html, /\[data-theme=["']dark["']\]/);
   assert.match(html, /localStorage\.getItem\(["']rocos-igh-theme["']\)/);
   assert.match(html, /localStorage\.setItem\(["']rocos-igh-theme["']/);
+});
+
+
+test('renders and refreshes status tags while type changes preserve them', () => {
+  const context = vm.createContext({ ...decoder, selectedTypes: new Map() });
+  const functions = html.slice(html.indexOf('  function renderTypeSelector'), html.indexOf('  function setText'));
+  vm.runInContext(functions, context);
+  const variable = { index: '6041', sub_index: 0, size: 2, offset: 14, bytes: '0812', name: 'Status Word' };
+  const rendered = context.renderVariableRow(0, 'in', variable);
+  assert.match(rendered, /08 12 = 4616/);
+  assert.match(rendered, /status-bad/);
+  assert.match(rendered, /故障/);
+  assert.equal((rendered.match(/class="status-tag /g) || []).length, 1);
+  assert.doesNotMatch(rendered, /远程控制|模式专用位|bit 12/);
+  const cells = { '.raw-value': {}, '.status-tags': {} };
+  const row = { dataset: {}, querySelector: selector => cells[selector] };
+  const container = { querySelector: () => row };
+  context.updateVariableRow(container, 0, 'in', { ...variable, bytes: '2700' });
+  assert.equal(cells['.raw-value'].textContent, '27 00 = 39');
+  assert.match(cells['.status-tags'].innerHTML, /运行已使能/);
+  assert.doesNotMatch(cells['.status-tags'].innerHTML, /status-bad/);
+  const tagsBefore = cells['.status-tags'].innerHTML;
+  context.$ = () => ({ addEventListener: (_, handler) => { context.change = handler; } });
+  vm.runInContext(html.slice(html.indexOf("  $('slaves').addEventListener('change'"), html.indexOf('  // 优先用 SSE')), context);
+  context.change({ target: { closest: () => ({ dataset: { key: 'test' }, value: 'INT16', closest: () => row }) } });
+  assert.equal(cells['.status-tags'].innerHTML, tagsBefore);
+  assert.equal(context.renderStatusTags({ ...variable, index: '6040' }), '');
+  context.updateVariableRow(container, 0, 'in', { ...variable, bytes: '' });
+  assert.equal(cells['.raw-value'].textContent, '-');
+  assert.match(cells['.status-tags'].innerHTML, /状态字数据无效/);
 });

@@ -45,3 +45,32 @@ export function formatTypedBytes(hexBytes, type) {
   if (!hex) return '-';
   return `${hex} = ${decodeValue(hexBytes, type)}`;
 }
+
+// CiA 402 PDS state coding: only bits 0–3, 5–6 participate.
+// Bit 5 is also ignored for states whose pattern marks it as x (mask 0x004f).
+// https://doc.synapticon.com/circulo/sw5.1/objects_html/6xxx/6041.html
+const STATUS_STATES = [
+  [0x004f, 0x0000, '未准备好上电', 'muted'],
+  [0x004f, 0x0040, '禁止上电', 'muted'],
+  [0x006f, 0x0021, '准备好上电', 'info'],
+  [0x006f, 0x0023, '已上电', 'info'],
+  [0x006f, 0x0027, '运行已使能', 'ok'],
+  [0x006f, 0x0007, '快速停机中', 'warn'],
+  [0x004f, 0x000f, '故障反应中', 'bad'],
+  [0x004f, 0x0008, '故障', 'bad'],
+];
+export function decodeStatusWord(variable) {
+  // The server sends the object index as hexadecimal text, without a prefix.
+  const index = typeof variable.index === 'number' ? variable.index
+    : /^(?:0x)?6041$/i.test(variable.index) ? 0x6041 : NaN;
+  if (index !== 0x6041 || variable.sub_index !== 0) return null;
+  if (variable.size !== 2 || typeof variable.bytes !== 'string'
+      || !/^[0-9a-f]{4}$/i.test(variable.bytes)) {
+    return { tags: [{ label: '状态字数据无效', tone: 'warn' }], detail: '0x6041:00 需要完整的 2 字节小端数据' };
+  }
+  const word = decodeValue(variable.bytes, 'UINT16');
+  const state = STATUS_STATES.find(([mask, value]) => (word & mask) === value);
+  const tags = [{ label: state ? state[2] : '未知状态', tone: state ? state[3] : 'warn' }];
+  const detail = `CiA 402: ${tags[0].label}`;
+  return { word, tags, detail };
+}
