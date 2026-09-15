@@ -313,6 +313,12 @@ public:
             return false;
         }
         pd_output_size_ = static_cast<std::size_t>(pdOutputSize);
+
+        // Explicitly zero both buffers regardless of kernel page-allocation
+        // guarantees: the master always starts from a known-clean state and
+        // slaves receive zero output on the very first cycle.
+        std::memset(pdInputPtr,  0, pd_input_size_);
+        std::memset(pdOutputPtr, 0, pd_output_size_);
         return true;
     }
 
