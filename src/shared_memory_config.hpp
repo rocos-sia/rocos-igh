@@ -319,6 +319,12 @@ public:
         // slaves receive zero output on the very first cycle.
         std::memset(pdInputPtr,  0, pd_input_size_);
         std::memset(pdOutputPtr, 0, pd_output_size_);
+
+        print_message("[SHM] pd_input " + pd_in +
+                      " size=" + std::to_string(pd_input_size_) + " bytes"
+                      " pd_output " + pd_out +
+                      " size=" + std::to_string(pd_output_size_) + " bytes",
+                      MessageLevel::NORMAL);
         return true;
     }
 

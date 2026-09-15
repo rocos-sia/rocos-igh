@@ -315,6 +315,10 @@ bool EthercatMaster::initialize(unsigned int master_id,
     input_size_ = ecrt_domain_size(input_domain_);
     output_size_ = ecrt_domain_size(output_domain_);
 
+    std::cout << "[EthercatMaster] master_id=" << master_id
+              << " input_domain_size=" << input_size_ << " bytes"
+              << " output_domain_size=" << output_size_ << " bytes\n";
+
     if (input_data_ == nullptr || output_data_ == nullptr) {
         error = "failed to acquire domain data";
         reset();

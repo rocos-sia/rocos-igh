@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "pdo_config.hpp"
