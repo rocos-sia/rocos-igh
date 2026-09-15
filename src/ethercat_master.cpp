@@ -374,6 +374,7 @@ bool EthercatMaster::waitForSlavesInPreop(
         pending[i].info = {};
     }
 
+    bool first_all_ready_seen = false;
     for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
         bool all_ready = true;
         for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
@@ -396,11 +397,36 @@ bool EthercatMaster::waitForSlavesInPreop(
             // not sufficient evidence that the slave is stable enough for PDO
             // remapping.
             ++stable_count;
+            if (!first_all_ready_seen) {
+                first_all_ready_seen = true;
+                std::cout << "[EthercatMaster] All slaves reached PREOP after "
+                          << attempt << " attempts, waiting for "
+                          << kPreopStableConfirmations << " stable confirmations\n";
+            }
             if (stable_count >= kPreopStableConfirmations) {
+                std::cout << "[EthercatMaster] PREOP stable confirmations complete\n";
                 return true;
             }
         } else {
+            if (stable_count > 0) {
+                std::cout << "[EthercatMaster] PREOP stability lost at attempt "
+                          << attempt << ", resetting stable_count from "
+                          << stable_count << " to 0\n";
+            }
             stable_count = 0;
+            // Log not-ready slaves every 50 attempts during the wait.
+            if (attempt % 50U == 0U) {
+                std::cout << "[EthercatMaster] Waiting for PREOP (attempt "
+                          << attempt << "/" << max_attempts << "):";
+                for (const PendingEntry &entry : pending) {
+                    if (!slaveReadyForConfiguration(entry.info)) {
+                        std::cout << " slave[" << entry.index << "]="
+                                  << alStateName(entry.info.al_state)
+                                  << (entry.info.error_flag ? "(ERR)" : "");
+                    }
+                }
+                std::cout << '\n';
+            }
         }
 
         if (attempt + 1U < max_attempts) {
@@ -453,10 +479,22 @@ bool EthercatMaster::activateWithInitialApplicationTime(
     if (dc_enabled && !seed_application_time("before")) {
         return false;
     }
+
+    std::cout << "[EthercatMaster] Activating master...\n";
+    timespec activate_start{};
+    ::clock_gettime(CLOCK_MONOTONIC, &activate_start);
+
     if (activate() != 0) {
         error = "failed to activate EtherCAT master";
         return false;
     }
+
+    timespec activate_end{};
+    ::clock_gettime(CLOCK_MONOTONIC, &activate_end);
+    const long activate_us = (activate_end.tv_sec - activate_start.tv_sec) * 1000000L +
+                             (activate_end.tv_nsec - activate_start.tv_nsec) / 1000L;
+    std::cout << "[EthercatMaster] Master activation took " << activate_us << " us\n";
+
     if (dc_enabled && !seed_application_time("after")) {
         return false;
     }
