@@ -157,3 +157,65 @@ slaves:
           - { name: Torque Actual Value,   index: 0x6077, sub_index: 0, bit_length: 16 }
           - { name: Digital Inputs,        index: 0x60FD, sub_index: 0, bit_length: 32 }
           - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
+  - id: 6
+    name: XJC FT Sensor
+    dc:
+      assign_activate: 0x0300
+      sync0_shift_ns: 0
+      sync1_cycle_ns: 0
+      sync1_shift_ns: 0
+    rx_pdos:
+      - index: 0x1600
+        entries:
+          - { name: Set Zero 1, index: 0x7000, sub_index: 1, bit_length: 8}
+          # - { name: Set Zero 2, index: 0x7000, sub_index: 2, bit_length: 1 }
+          # - { name: Set Zero 3, index: 0x7000, sub_index: 3, bit_length: 1 }
+          # - { name: Set Zero 4, index: 0x7000, sub_index: 4, bit_length: 1 }
+          # - { name: Set Zero 5, index: 0x7000, sub_index: 5, bit_length: 1 }
+          # - { name: Set Zero 6, index: 0x7000, sub_index: 6, bit_length: 1 }
+          # - { name: Set Zero 7, index: 0x7000, sub_index: 7, bit_length: 1 }
+          # - { name: Set Zero 8, index: 0x7000, sub_index: 8, bit_length: 1 }
+          - { name: Set Zero All, index: 0x7000, sub_index: 9, bit_length: 8 }
+          - { name: Set Zero PV 1, index: 0x7002, sub_index: 1, bit_length: 8 }
+          # - { name: Set Zero PV 2, index: 0x7002, sub_index: 2, bit_length: 1 }
+          # - { name: Set Zero PV 3, index: 0x7002, sub_index: 3, bit_length: 1 }
+          # - { name: Set Zero PV 4, index: 0x7002, sub_index: 4, bit_length: 1 }
+          # - { name: Set Zero PV 5, index: 0x7002, sub_index: 5, bit_length: 1 }
+          # - { name: Set Zero PV 6, index: 0x7002, sub_index: 6, bit_length: 1 }
+          # - { name: Set Zero PV 7, index: 0x7002, sub_index: 7, bit_length: 1 }
+          # - { name: Set Zero PV 8, index: 0x7002, sub_index: 8, bit_length: 1 }
+          - { name: Set Zero PV All, index: 0x7002, sub_index: 9, bit_length: 8 }
+          - { name: Param Set, index: 0x7003, sub_index: 0, bit_length: 32 }
+          - { name: Set Value, index: 0x7004, sub_index: 0, bit_length: 32 }
+    
+    tx_pdos:
+      - index: 0x1A00
+        entries:
+          - { name: fx, index: 0x6000, sub_index: 1, bit_length: 32 }
+          - { name: fy, index: 0x6001, sub_index: 1, bit_length: 32 }
+          - { name: fz, index: 0x6002, sub_index: 1, bit_length: 32 }
+          - { name: tx, index: 0x6003, sub_index: 1, bit_length: 32 }
+          - { name: ty, index: 0x6004, sub_index: 1, bit_length: 32 }
+          - { name: tz, index: 0x6005, sub_index: 1, bit_length: 32 }
+          - { name: ch7, index: 0x6006, sub_index: 1, bit_length: 32 }
+          - { name: ch8, index: 0x6007, sub_index: 1, bit_length: 32 }
+          - { name: zero fail 1, index: 0x6020, sub_index: 1, bit_length: 8 }
+          # - { name: zero fail 2, index: 0x6020, sub_index: 2, bit_length: 1 }
+          # - { name: zero fail 3, index: 0x6020, sub_index: 3, bit_length: 1 }
+          # - { name: zero fail 4, index: 0x6020, sub_index: 4, bit_length: 1 }
+          # - { name: zero fail 5, index: 0x6020, sub_index: 5, bit_length: 1 }
+          # - { name: zero fail 6, index: 0x6020, sub_index: 6, bit_length: 1 }
+          # - { name: zero fail 7, index: 0x6020, sub_index: 7, bit_length: 1 }
+          # - { name: zero fail 8, index: 0x6020, sub_index: 8, bit_length: 1 }
+          - { name: None,        index: 0x0000, sub_index: 0, bit_length: 8 }
+          - { name: save fail 1, index: 0x6021, sub_index: 1, bit_length: 8 }
+          # - { name: save fail 2, index: 0x6021, sub_index: 2, bit_length: 1 }
+          # - { name: save fail 3, index: 0x6021, sub_index: 3, bit_length: 1 }
+          # - { name: save fail 4, index: 0x6021, sub_index: 4, bit_length: 1 }
+          # - { name: save fail 5, index: 0x6021, sub_index: 5, bit_length: 1 }
+          # - { name: save fail 6, index: 0x6021, sub_index: 6, bit_length: 1 }
+          # - { name: save fail 7, index: 0x6021, sub_index: 7, bit_length: 1 }
+          # - { name: save fail 8, index: 0x6021, sub_index: 8, bit_length: 1 }
+          - { name: None,        index: 0x0000, sub_index: 0, bit_length: 8 }
+          - { name: Param read,  index: 0x6022, sub_index: 0, bit_length: 32}
+
