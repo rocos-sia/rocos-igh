@@ -37,9 +37,7 @@
 │  4. ecrt_slave_config_pdos()     配置 PDO/同步管理器映射                    │
 │  5a. ecrt_domain_reg_pdo_entry_list()  批量注册 PDO 条目                │
 │  5b. ecrt_slave_config_sdo*() / ecrt_slave_config_*  其它配置(可选)       │
-│  5c. DC 启用时: ecrt_master_application_time() 播种初始应用时间             │
 │  6. ecrt_master_activate()   结束配置、进入运行阶段                         │
-│  6a. DC 启用时: 立即刷新 ecrt_master_application_time()                    │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -222,7 +220,7 @@ ecrt_domain_reg_pdo_entry_list(domain1, domain1_regs);
 | `ecrt_slave_config_create_sdo_request(...)` | 创建 SDO 请求,用于运行期异步读写 SDO。 |
 | `ecrt_slave_config_create_voe_handler(...)` | 创建 VoE 处理器,用于厂商自定义 mailbox 协议。 |
 | `ecrt_master_select_reference_clock(sc)` | 选择分布式时钟参考时钟(默认选第一个支持 DC 的从站)。 |
-| `ecrt_master_application_time(t)` | 设置应用时间,供 DC 同步使用(虽标 `master_op`,但需在运行期周期调用)。 |
+
 
 ---
 
@@ -496,27 +494,25 @@ SYNC0 周期由 `--period-us` 换算为纳秒。启用后若没有且仅有一�
 若使用分布式时钟同步:
 
 ```c
-// 激活前:先配置各从站 DC、选择参考时钟并播种应用时间
+// 激活前:配置各从站 DC、选择参考时钟，不设置应用时间
 ecrt_slave_config_dc(sc, assign, sync0_cycle, sync0_shift,
                      sync1_cycle, sync1_shift);
-ecrt_master_select_reference_clock(dc_ref_sc);
-ecrt_master_application_time(master, monotonic_time_ns);
-
+ecrt_master_select_reference_clock(master, dc_ref_sc);
 ecrt_master_activate(master);
-ecrt_master_application_time(master, refreshed_monotonic_time_ns);
 
-// 运行期,每个周期顺序调用:
-ecrt_master_application_time(master, app_time);
-ecrt_master_sync_reference_clock(master);
+// 运行期:从首个周期起，以目标唤醒时间设置应用时间。
+ecrt_master_application_time(master, deadline_ns);
+// receive/process、PDO 处理、domain queue ...
+clock_gettime(CLOCK_MONOTONIC, &now);
+ecrt_master_sync_reference_clock_to(master, TIMESPEC2NS(now));
 ecrt_master_sync_slave_clocks(master);
+ecrt_master_send(master);
 ```
 
-- 本机 IgH 1.6.12 实现会在首次收到非零应用时间时初始化内部
-  `dc_ref_time`。ROCOS 因此在激活前播种一次，并在激活返回后、获取域缓冲区和
-  创建 IPC 之前立即刷新一次，避免异步状态机在 `dc_ref_time == 0` 时跳过从站
-  64 位 System Time Offset 初始化。
-- 激活前调用是针对该 IgH 实现的启动期例外；激活后的周期调用仍是正常的
-  `master_op, rt_safe` 用法，并保持在实时循环的固定位置。
+- 首次应用时间会成为 IgH 的 `dc_ref_time`，必须与周期调度共用相位基准。
+  当前从周期目标 deadline 开始设置，不在激活前后使用独立时间播种。
+- 参考时钟校准使用发送前的实际单调时间，避免把周期处理耗时混入校准值。
+- 激活后不进行固定时长的睡眠等待；应用通过周期收发推动配置与状态切换。
 - 当前周期顺序为 application time → receive/process → PDO 复制/状态 →
   domain queue → reference/slave clock sync → send。
 - 配置期 DC 调用失败会中止启动；运行期 DC 调用失败会停止周期任务并返回

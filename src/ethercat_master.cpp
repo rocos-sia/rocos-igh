@@ -40,7 +40,7 @@ const char *dcErrorStageName(DcErrorStage stage) noexcept {
     case DcErrorStage::ApplicationTime:
         return "ecrt_master_application_time";
     case DcErrorStage::SyncReferenceClock:
-        return "ecrt_master_sync_reference_clock";
+        return "ecrt_master_sync_reference_clock_to";
     case DcErrorStage::SyncSlaveClocks:
         return "ecrt_master_sync_slave_clocks";
     case DcErrorStage::None:
@@ -92,19 +92,6 @@ bool EthercatMaster::initialize(unsigned int master_id,
         reset();
         return false;
     }
-
-    // Explicitly reset all slaves to INIT state before configuration.
-    // This ensures a clean state transition even if slaves were previously in OP,
-    // which can prevent PDO update issues on some devices.
-    std::cout << "[EthercatMaster] Resetting all slaves to INIT state...\n";
-    if (ecrt_master_reset(master_) != 0) {
-        error = "failed to reset master to INIT state";
-        reset();
-        return false;
-    }
-
-    // Wait briefly for INIT state to settle before requesting PREOP.
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // IgH requests PREOP asynchronously when the master is reserved. Activating
     // while a slave is still OP can overwrite that request and skip reconfiguration.
@@ -305,24 +292,10 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
-    const auto read_application_time = [](std::uint64_t &application_time) {
-        timespec now{};
-        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-            return errno;
-        }
-        application_time = static_cast<std::uint64_t>(now.tv_sec) * 1000000000ULL +
-                           static_cast<std::uint64_t>(now.tv_nsec);
-        return 0;
-    };
-    const auto apply_application_time = [this](std::uint64_t application_time) {
-        return ecrt_master_application_time(master_, application_time);
-    };
-    const auto activate_master = [this] {
-        return ecrt_master_activate(master_);
-    };
-    if (!activateWithInitialApplicationTime(
-            dc_runtime.enabled, error, read_application_time,
-            apply_application_time, activate_master)) {
+    // Application time is first supplied by the cyclic task's deadline, so
+    // IgH's DC phase origin and the application's schedule share one epoch.
+    if (ecrt_master_activate(master_) != 0) {
+        error = "failed to activate EtherCAT master";
         reset();
         return false;
     }
@@ -466,59 +439,6 @@ bool EthercatMaster::waitForSlavesInPreop(
     return false;
 }
 
-bool EthercatMaster::activateWithInitialApplicationTime(
-    bool dc_enabled,
-    std::string &error,
-    const std::function<int(std::uint64_t &)> &read_time,
-    const std::function<int(std::uint64_t)> &apply_time,
-    const std::function<int()> &activate) {
-    error.clear();
-    last_dc_error_ = DcError{};
-    const auto seed_application_time = [&](const char *position) {
-        std::uint64_t application_time = 0;
-        const int clock_result = read_time(application_time);
-        if (clock_result != 0) {
-            error = std::string("failed to read CLOCK_MONOTONIC ") + position +
-                    " master activation (error " +
-                    std::to_string(clock_result) + ")";
-            return false;
-        }
-        const int application_result = apply_time(application_time);
-        if (application_result != 0) {
-            recordDcError(DcErrorStage::ApplicationTime, application_result);
-            error = std::string("failed to set DC application time ") + position +
-                    " master activation (error " +
-                    std::to_string(application_result) + ")";
-            return false;
-        }
-        return true;
-    };
-
-    if (dc_enabled && !seed_application_time("before")) {
-        return false;
-    }
-
-    std::cout << "[EthercatMaster] Activating master...\n";
-    timespec activate_start{};
-    ::clock_gettime(CLOCK_MONOTONIC, &activate_start);
-
-    if (activate() != 0) {
-        error = "failed to activate EtherCAT master";
-        return false;
-    }
-
-    timespec activate_end{};
-    ::clock_gettime(CLOCK_MONOTONIC, &activate_end);
-    const long activate_us = (activate_end.tv_sec - activate_start.tv_sec) * 1000000L +
-                             (activate_end.tv_nsec - activate_start.tv_nsec) / 1000L;
-    std::cout << "[EthercatMaster] Master activation took " << activate_us << " us\n";
-
-    if (dc_enabled && !seed_application_time("after")) {
-        return false;
-    }
-    return true;
-}
-
 // Receives a frame and processes both domains' working counters (rt_safe).
 void EthercatMaster::receiveAndProcess() noexcept {
     if (!initialized_ || master_ == nullptr || input_domain_ == nullptr || output_domain_ == nullptr) {
@@ -555,7 +475,16 @@ bool EthercatMaster::queueAndSend() noexcept {
     (void)ecrt_domain_queue(input_domain_);
     (void)ecrt_domain_queue(output_domain_);
     if (dc_enabled_) {
-        const int reference_result = ecrt_master_sync_reference_clock(master_);
+        // Keep application_time on the nominal deadline; drift compensation
+        // instead uses the actual time close to transmission (dc_user example).
+        timespec now{};
+        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            recordDcError(DcErrorStage::SyncReferenceClock, -errno);
+            return false;
+        }
+        const auto sync_time = static_cast<std::uint64_t>(now.tv_sec) * 1000000000ULL +
+                               static_cast<std::uint64_t>(now.tv_nsec);
+        const int reference_result = ecrt_master_sync_reference_clock_to(master_, sync_time);
         if (reference_result != 0) {
             recordDcError(DcErrorStage::SyncReferenceClock, reference_result);
             return false;

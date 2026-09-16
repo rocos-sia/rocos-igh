@@ -38,17 +38,6 @@ struct EthercatMasterTestPeer {
             config, error, query, wait, max_attempts);
     }
 
-    static bool activateWithInitialApplicationTime(
-        EthercatMaster &master,
-        bool dc_enabled,
-        std::string &error,
-        const std::function<int(std::uint64_t &)> &read_time,
-        const std::function<int(std::uint64_t)> &apply_time,
-        const std::function<int()> &activate) {
-        return master.activateWithInitialApplicationTime(
-            dc_enabled, error, read_time, apply_time, activate);
-    }
-
     static void seedState(EthercatMaster &master,
                           bool initialized,
                           ec_master_t *master_ptr,
@@ -825,127 +814,6 @@ bool testWaitsForAllSlavesToReachPreop() {
     return true;
 }
 
-bool testActivationSeedsDcApplicationTime() {
-    rocos::EthercatMaster master;
-    std::vector<std::string> calls;
-    const std::uint64_t times[] = {1000000001ULL, 1000000999ULL};
-    std::size_t next_time = 0;
-    std::vector<std::uint64_t> applied_times;
-    std::string error;
-
-    const auto read_time = [&](std::uint64_t &value) {
-        calls.emplace_back("clock");
-        value = times[next_time++];
-        return 0;
-    };
-    const auto apply_time = [&](std::uint64_t value) {
-        calls.emplace_back("application_time");
-        applied_times.push_back(value);
-        return 0;
-    };
-    const auto activate = [&] {
-        calls.emplace_back("activate");
-        return 0;
-    };
-
-    CHECK(rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error, read_time, apply_time, activate));
-    CHECK(error.empty());
-    CHECK(calls == std::vector<std::string>({
-        "clock", "application_time", "activate", "clock", "application_time"
-    }));
-    CHECK(applied_times == std::vector<std::uint64_t>({times[0], times[1]}));
-
-    calls.clear();
-    next_time = 0;
-    applied_times.clear();
-    CHECK(rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, false, error, read_time, apply_time, activate));
-    CHECK(error.empty());
-    CHECK(calls == std::vector<std::string>({"activate"}));
-    CHECK(next_time == 0U);
-    CHECK(applied_times.empty());
-    return true;
-}
-
-bool testActivationDcFailuresStopAtFailingOperation() {
-    rocos::EthercatMaster master;
-    std::string error;
-    std::size_t clock_calls = 0;
-    std::size_t application_calls = 0;
-    std::size_t activation_calls = 0;
-
-    const auto good_clock = [&](std::uint64_t &value) {
-        ++clock_calls;
-        value = 42U + clock_calls;
-        return 0;
-    };
-    const auto good_application = [&](std::uint64_t) {
-        ++application_calls;
-        return 0;
-    };
-    const auto good_activation = [&] {
-        ++activation_calls;
-        return 0;
-    };
-
-    CHECK(!rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error,
-        [](std::uint64_t &) { return EIO; }, good_application, good_activation));
-    CHECK(error.find("CLOCK_MONOTONIC before master activation") != std::string::npos);
-    CHECK(application_calls == 0U);
-    CHECK(activation_calls == 0U);
-
-    clock_calls = application_calls = activation_calls = 0;
-    CHECK(!rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error, good_clock,
-        [&](std::uint64_t) { ++application_calls; return -EIO; },
-        good_activation));
-    CHECK(error.find("DC application time before master activation") != std::string::npos);
-    CHECK(master.lastDcError().stage == rocos::DcErrorStage::ApplicationTime);
-    CHECK(master.lastDcError().error_code == -EIO);
-    CHECK(clock_calls == 1U);
-    CHECK(application_calls == 1U);
-    CHECK(activation_calls == 0U);
-
-    clock_calls = application_calls = activation_calls = 0;
-    CHECK(!rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error, good_clock, good_application,
-        [&] { ++activation_calls; return -EIO; }));
-    CHECK(error == "failed to activate EtherCAT master");
-    CHECK(clock_calls == 1U);
-    CHECK(application_calls == 1U);
-    CHECK(activation_calls == 1U);
-
-    clock_calls = application_calls = activation_calls = 0;
-    CHECK(!rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error,
-        [&](std::uint64_t &value) {
-            ++clock_calls;
-            value = 100U + clock_calls;
-            return clock_calls == 2U ? EIO : 0;
-        }, good_application, good_activation));
-    CHECK(error.find("CLOCK_MONOTONIC after master activation") != std::string::npos);
-    CHECK(clock_calls == 2U);
-    CHECK(application_calls == 1U);
-    CHECK(activation_calls == 1U);
-
-    clock_calls = application_calls = activation_calls = 0;
-    CHECK(!rocos::EthercatMasterTestPeer::activateWithInitialApplicationTime(
-        master, true, error, good_clock,
-        [&](std::uint64_t) {
-            ++application_calls;
-            return application_calls == 2U ? -EIO : 0;
-        }, good_activation));
-    CHECK(error.find("DC application time after master activation") != std::string::npos);
-    CHECK(master.lastDcError().stage == rocos::DcErrorStage::ApplicationTime);
-    CHECK(master.lastDcError().error_code == -EIO);
-    CHECK(clock_calls == 2U);
-    CHECK(application_calls == 2U);
-    CHECK(activation_calls == 1U);
-    return true;
-}
-
 bool testMasterCyclicCallsBeforeInitialization() {
     rocos::EthercatMaster master;
     CHECK(!master.initialized());
@@ -1161,12 +1029,6 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testWaitsForAllSlavesToReachPreop()) {
-        return EXIT_FAILURE;
-    }
-    if (!testActivationSeedsDcApplicationTime()) {
-        return EXIT_FAILURE;
-    }
-    if (!testActivationDcFailuresStopAtFailingOperation()) {
         return EXIT_FAILURE;
     }
     if (!testMasterCyclicCallsBeforeInitialization()) {

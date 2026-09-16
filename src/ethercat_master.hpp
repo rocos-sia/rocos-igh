@@ -116,12 +116,6 @@ private:
         const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
         const std::function<void()> &wait,
         std::size_t max_attempts);
-    bool activateWithInitialApplicationTime(
-        bool dc_enabled,
-        std::string &error,
-        const std::function<int(std::uint64_t &)> &read_time,
-        const std::function<int(std::uint64_t)> &apply_time,
-        const std::function<int()> &activate);
     void recordDcError(DcErrorStage stage, int error_code) noexcept;
     void reset() noexcept;
 
