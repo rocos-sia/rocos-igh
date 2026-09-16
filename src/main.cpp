@@ -16,6 +16,7 @@
 
 // 标准库与系统头文件。
 #include <array>       // std::array（预触碰栈缓冲区）
+#include <chrono>      // std::chrono::milliseconds（激活后延迟）
 #include <cstdlib>     // EXIT_SUCCESS / EXIT_FAILURE
 #include <cerrno>      // errno（错误码）
 #include <csignal>     // sig_atomic_t / sigaction / SIGINT / SIGTERM
@@ -24,6 +25,7 @@
 #include <sched.h>     // sched_param / SCHED_FIFO / sched_setscheduler
 #include <string>      // std::string
 #include <sys/mman.h>  // mlockall / MCL_CURRENT / MCL_FUTURE
+#include <thread>      // std::this_thread::sleep_for（激活后延迟）
 #include <utility>     // std::move
 
 namespace {
@@ -148,6 +150,14 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
     rocos::printLoadedSlaveConfig(loaded_config, std::cout);
+
+    // Give IgH time to start driving slaves from PREOP to OP after activation.
+    // The activation itself is synchronous, but the state machine that configures
+    // FMMUs, Sync Managers, and transitions slaves through SAFEOP to OP runs
+    // asynchronously. Starting the cyclic task immediately can race with these
+    // transitions and cause some slaves to miss their initial PDO configuration.
+    std::cout << "[Main] Waiting 200ms for state machine to stabilize after activation...\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // —— 第五步：创建共享内存 IPC（总线快照 + PDO 缓冲区）——
     rocos::SharedMemoryConfig ipc(static_cast<int>(options.master_id)); // 按 master_id 隔离命名
