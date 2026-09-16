@@ -93,6 +93,19 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
+    // Explicitly reset all slaves to INIT state before configuration.
+    // This ensures a clean state transition even if slaves were previously in OP,
+    // which can prevent PDO update issues on some devices.
+    std::cout << "[EthercatMaster] Resetting all slaves to INIT state...\n";
+    if (ecrt_master_reset(master_) != 0) {
+        error = "failed to reset master to INIT state";
+        reset();
+        return false;
+    }
+
+    // Wait briefly for INIT state to settle before requesting PREOP.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
     // IgH requests PREOP asynchronously when the master is reserved. Activating
     // while a slave is still OP can overwrite that request and skip reconfiguration.
     // Print current state of every slave before the wait loop so any non-PREOP
