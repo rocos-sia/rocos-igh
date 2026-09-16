@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <iostream>
 #include <thread>
@@ -113,6 +114,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
+    slave_configs_.reserve(config.slave_count);
     ec_slave_config_t *reference_clock_config = nullptr;
     for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
         SlaveSpec &slave = config.slaves[slave_index];
@@ -195,6 +197,8 @@ bool EthercatMaster::initialize(unsigned int master_id,
             reset();
             return false;
         }
+
+        slave_configs_.push_back(sc);
 
         if (ecrt_slave_config_pdos(sc, EC_END, slave.syncs) != 0) {
             error = "failed to configure slave PDOs";
@@ -335,6 +339,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
+    std::memset(output_data_, 0, output_size_);
     dc_enabled_ = dc_runtime.enabled;
     initialized_ = true;
     return true;
@@ -563,9 +568,11 @@ BusState EthercatMaster::readState() noexcept {
     ec_domain_state_t input_state{};
     ec_domain_state_t output_state{};
 
-    (void)ecrt_master_state(master_, &master_state);
-    (void)ecrt_domain_state(input_domain_, &input_state);
-    (void)ecrt_domain_state(output_domain_, &output_state);
+    if (ecrt_master_state(master_, &master_state) != 0 ||
+        ecrt_domain_state(input_domain_, &input_state) != 0 ||
+        ecrt_domain_state(output_domain_, &output_state) != 0) {
+        return state;
+    }
 
     state.responding_slaves = master_state.slaves_responding;
     state.al_states = master_state.al_states;
@@ -576,6 +583,23 @@ BusState EthercatMaster::readState() noexcept {
     state.output_wc_state = output_state.wc_state;
 
     return state;
+}
+
+int EthercatMaster::pollSlaves(ec_al_state_t target, bool &all_ready) noexcept {
+    all_ready = initialized_ && !slave_configs_.empty();
+    int first_error = 0;
+    for (const auto *sc : slave_configs_) {
+        ec_slave_config_state_t state{};
+        const int rc = ecrt_slave_config_state(sc, &state);
+        if (rc != 0 && first_error == 0) {
+            first_error = rc;
+        }
+        if (rc != 0 || !state.online || state.al_state != target ||
+            (target == EC_AL_STATE_OP && !state.operational)) {
+            all_ready = false;
+        }
+    }
+    return first_error;
 }
 
 // Returns the cached input-domain process-data base pointer.
@@ -614,6 +638,7 @@ void EthercatMaster::recordDcError(DcErrorStage stage, int error_code) noexcept 
 
 // Releases the master at most once and nulls every borrowed pointer and domain.
 void EthercatMaster::reset() noexcept {
+    slave_configs_.clear();
     input_data_ = nullptr;
     output_data_ = nullptr;
     input_size_ = 0;

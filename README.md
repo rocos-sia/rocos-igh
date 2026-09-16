@@ -69,3 +69,13 @@ identity to IgH for strict matching.
 - [API guide](docs/api-guide.md)
 - [EtherCAT terminal commands](docs/ethercat-terminal-commands.md)
 
+
+### 启动状态确认
+
+启动时先逐个查询配置中的从站，等待全部处于无错误的 PREOP，连续确认 5 次后才进行 PDO/DC 等配置（轮询间隔 10 ms，最多 500 次）。激活成功仅表示配置已提交，不表示从站已经进入 OP。
+
+激活后的启动循环继续按配置周期收发 PDO 和 DC 同步报文，逐个使用 `ecrt_slave_config_state()` 查询从站。全部从站在线、处于 OP 且 `operational` 有效，链路正常、响应从站数量匹配、输入/输出域工作计数器均为 `EC_WC_COMPLETE`，连续确认 5 个周期后才读取客户端输出、发布过程数据并通知客户端。启动期间发送清零后的输出域；PREOP 和 OP 确认成功均打印日志。
+
+OP 确认采用单调时钟的 10 秒超时；状态查询失败或超时会停止启动并返回错误，不会继续处理客户端输出。链路掉线或工作计数器不完整会清除连续成功计数；周期超时跳过已错过的周期，不补跑，也不延长启动超时。运行期链路/WC/汇总 OP 状态异常会使共享总线的 `is_authorized` 为 false，现有周期通信仍继续，不自动执行状态重置。
+
+当前保持标准 IgH 接口：SAFEOP → OP 由 IgH 自动推进，**不提供“全部停留 SAFEOP、检查后再请求 OP”的屏障**。`initialize()` 完成配置与激活，OP 就绪确认在 `CyclicTask::run()` 的启动阶段完成。启动状态测试使用模拟查询，无需硬件；真实从站状态转换仍需单独进行硬件集成验证。

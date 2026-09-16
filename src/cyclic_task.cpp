@@ -2,10 +2,10 @@
 
 #include <cerrno>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
 
 #include "shared_memory_config.hpp"
+#include "startup_wait.hpp"
 
 #if ROCOS_IGH_BUILD_MASTER
 #include "ethercat_master.hpp"
@@ -151,6 +151,7 @@ void updateSharedBus(const BusState &state,
     bus.current_state = static_cast<int>(state.al_states);
 
     bus.is_authorized = state.link_up &&
+                        state.al_states == EC_AL_STATE_OP &&
                         state.responding_slaves == static_cast<unsigned int>(bus.slave_num) &&
                         state.input_wc_state == EC_WC_COMPLETE &&
                         state.output_wc_state == EC_WC_COMPLETE;
@@ -176,97 +177,78 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     timespec deadline = fromNanoseconds(toNanoseconds(now) + (static_cast<std::int64_t>(period_us_) * 1000LL));
     timespec last_wake = now;
 
-    // -------------------------------------------------------------------------
-    // Warm-up phase: run a few initial cycles without publishing data to
-    // shared memory or notifying clients. This gives slaves time to stabilize
-    // their state machines (PREOP → SAFEOP → OP) and allows DC synchronization
-    // to settle before user code starts reading process data.
-    // -------------------------------------------------------------------------
-    constexpr std::size_t kWarmupCycles = 10U;
-    constexpr std::size_t kWarmupStableThreshold = 5U;
-    std::size_t warmup_stable_count = 0U;
-
-    std::cout << "[CyclicTask] Starting warm-up phase: " << kWarmupCycles
-              << " cycles, waiting for " << kWarmupStableThreshold
-              << " consecutive stable working counters\n";
-
-    for (std::size_t warmup_cycle = 0; warmup_cycle < kWarmupCycles && !stop_requested; ++warmup_cycle) {
+    // Keep exchanging zero-initialized domain data until every configured
+    // slave is OP and both working counters are complete for five polls.
+    // No shared output is consumed and no client is notified during startup.
+    StartupWait startup(toNanoseconds(now));
+    bool startup_ready = false;
+    while (!startup_ready && !stop_requested) {
         int sleep_rc = 0;
         do {
             sleep_rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr);
         } while (sleep_rc == EINTR && !stop_requested);
 
         if (stop_requested) {
-            std::cout << "[CyclicTask] Warm-up interrupted by stop signal\n";
+            std::cout << "[CyclicTask] Startup interrupted by stop signal\n";
             return 0;
         }
         if (sleep_rc != 0) {
-            std::cerr << "[CyclicTask] Warm-up clock_nanosleep failed: "
+            std::cerr << "[CyclicTask] Startup clock_nanosleep failed: "
                       << std::strerror(sleep_rc) << '\n';
             return sleep_rc;
         }
 
         timespec wake_time{};
         if (clock_gettime(CLOCK_MONOTONIC, &wake_time) != 0) {
-            std::cerr << "[CyclicTask] Warm-up clock_gettime failed: "
+            std::cerr << "[CyclicTask] Startup clock_gettime failed: "
                       << std::strerror(errno) << '\n';
             return errno;
         }
 
         if (!master_.setApplicationTime(
                 static_cast<std::uint64_t>(toNanoseconds(deadline)))) {
-            std::cerr << "[CyclicTask] Warm-up setApplicationTime failed\n";
+            std::cerr << "[CyclicTask] Startup setApplicationTime failed\n";
             return EIO;
         }
 
         master_.receiveAndProcess();
         const BusState state = master_.readState();
 
-        const bool wc_stable = (state.link_up &&
-                                state.input_wc_state == EC_WC_COMPLETE &&
-                                state.output_wc_state == EC_WC_COMPLETE);
-        if (wc_stable) {
-            ++warmup_stable_count;
-        } else {
-            warmup_stable_count = 0U;
+        bool all_operational = false;
+        if (master_.pollSlaves(EC_AL_STATE_OP, all_operational) != 0) {
+            return EIO;
         }
-
-        if (warmup_cycle % 5U == 0U || !wc_stable) {
-            std::cout << "[CyclicTask] Warm-up cycle " << warmup_cycle
-                      << ": link=" << (state.link_up ? "up" : "down")
+        const bool healthy = all_operational && state.link_up &&
+                             state.responding_slaves == master_.slaveCount() &&
+                             state.input_wc_state == EC_WC_COMPLETE &&
+                             state.output_wc_state == EC_WC_COMPLETE;
+        const auto result = startup.observe(toNanoseconds(wake_time), healthy);
+        if (result == StartupWait::Result::TimedOut) {
+            std::cerr << "[CyclicTask] Timed out waiting for all slaves in OP and complete WCs"
+                      << ": all_op=" << all_operational << " link=" << state.link_up
+                      << " responding=" << state.responding_slaves
                       << " input_wc=" << state.input_working_counter
-                      << " (" << (state.input_wc_state == EC_WC_COMPLETE ? "COMPLETE" :
-                                  state.input_wc_state == EC_WC_INCOMPLETE ? "INCOMPLETE" : "ZERO")
-                      << ") output_wc=" << state.output_working_counter
-                      << " (" << (state.output_wc_state == EC_WC_COMPLETE ? "COMPLETE" :
-                                  state.output_wc_state == EC_WC_INCOMPLETE ? "INCOMPLETE" : "ZERO")
-                      << ") stable_streak=" << warmup_stable_count << '\n';
+                      << " output_wc=" << state.output_working_counter << '\n';
+            return ETIMEDOUT;
         }
+        startup_ready = result == StartupWait::Result::Ready;
 
         if (!master_.queueAndSend()) {
-            std::cerr << "[CyclicTask] Warm-up queueAndSend failed\n";
+            std::cerr << "[CyclicTask] Startup queueAndSend failed\n";
             return EIO;
         }
 
         std::uint64_t missed = 0U;
         deadline = advanceDeadline(deadline, period_us_, wake_time, missed);
+        statistics_.missed_deadlines += missed;
         last_wake = wake_time;
     }
 
-    if (warmup_stable_count < kWarmupStableThreshold) {
-        std::cerr << "[CyclicTask] Warm-up completed but working counters never stabilized "
-                  << "(only " << warmup_stable_count << " consecutive stable cycles)\n";
-    } else {
-        std::cout << "[CyclicTask] Warm-up completed successfully: working counters stable\n";
+    if (stop_requested) {
+        return 0;
     }
-
-    // -------------------------------------------------------------------------
-    // Main cyclic loop: normal operation with shared-memory updates and
-    // client notifications.
-    // -------------------------------------------------------------------------
-    std::cout << "[CyclicTask] Entering main cyclic loop\n";
-
-    bool first_cycle = true;
+    std::cout << "[CyclicTask] All configured slaves reached OP; "
+                 "link and input/output working counters stable for 5 polls\n";
 
     while (!stop_requested) {
         int sleep_rc = 0;
@@ -296,21 +278,6 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         statistics_.current_us = elapsedMicroseconds(last_wake, wake_time);
 
         master_.receiveAndProcess();
-
-        // On the very first cycle after warm-up, log the initial pd_output
-        // content to confirm it is zero before any client writes.
-        if (first_cycle && ipc_.pdOutputPtr != nullptr && master_.outputSize() > 0U) {
-            const std::uint8_t *pd_out = static_cast<const std::uint8_t *>(ipc_.pdOutputPtr);
-            const std::size_t preview_size = (master_.outputSize() < 16U) ? master_.outputSize() : 16U;
-            std::cout << "[CyclicTask] First cycle pd_output[0.." << (preview_size - 1) << "]:";
-            for (std::size_t i = 0; i < preview_size; ++i) {
-                if (i % 4U == 0U) std::cout << ' ';
-                std::cout << std::hex << std::setw(2) << std::setfill('0')
-                          << static_cast<unsigned int>(pd_out[i]);
-            }
-            std::cout << std::dec << '\n';
-            first_cycle = false;
-        }
 
         copyProcessData(master_.inputData(),
                         master_.inputSize(),

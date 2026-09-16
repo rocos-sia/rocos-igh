@@ -49,6 +49,12 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	if(ROCOS_IGH_BUILD_MASTER)
+		add_executable(startup_state_test tests/startup_state_test.cpp)
+		target_link_libraries(startup_state_test PRIVATE rocos_igh_core)
+		target_link_options(startup_state_test PRIVATE "-Wl,--wrap=ecrt_slave_config_state")
+		add_test(NAME startup_state COMMAND startup_state_test)
+	endif()
 	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp)
 	target_include_directories(pdo_config_test PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/src"

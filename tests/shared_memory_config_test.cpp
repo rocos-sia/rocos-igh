@@ -806,9 +806,9 @@ bool testWaitsForAllSlavesToReachPreop() {
     };
     std::string error;
     CHECK(rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
-        config, error, query, [&] { ++waits; }, 3U));
+        config, error, query, [&] { ++waits; }, 6U));
     CHECK(error.empty());
-    CHECK(waits == 1U);
+    CHECK(waits == 5U);
 
     const auto failed_query = [](std::uint16_t, ec_slave_info_t &) { return -1; };
     CHECK(!rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
@@ -821,7 +821,7 @@ bool testWaitsForAllSlavesToReachPreop() {
     };
     CHECK(!rocos::EthercatMasterTestPeer::waitForSlavesInPreop(
         config, error, always_op, [] {}, 2U));
-    CHECK(error.find("timed out waiting for slave[1]") != std::string::npos);
+    CHECK(error.find("slave[1](al_state=") != std::string::npos);
     return true;
 }
 
