@@ -24,6 +24,7 @@
 #include <semaphore.h>
 #include <sstream>
 #include <string>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <thread>
@@ -215,9 +216,26 @@ public:
 
         const std::string shm_name = toPosixName(ecmName);
 
-        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0660);
+        // Do not O_TRUNC yet: an existing object must survive until the
+        // exclusive flock below proves no live owner still holds it.
+        ecm_fd_ = shm_open(shm_name.c_str(), O_RDWR | O_CREAT, 0660);
         if (ecm_fd_ < 0) {
             print_message("[SHM] Cannot create " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
+            umask(mask); return false;
+        }
+        // flock is held for as long as this fd stays open, so it ties
+        // ownership to process lifetime: a live master keeps the lock, and
+        // this call fails fast instead of silently truncating its memory. A
+        // stale object left by a crashed process has no lock holder, so the
+        // lock is acquired immediately and the object is safely reclaimed.
+        if (flock(ecm_fd_, LOCK_EX | LOCK_NB) != 0) {
+            if (errno == EWOULDBLOCK) {
+                print_message("[SHM] " + shm_name + " is owned by a running master (master id already active)", MessageLevel::ERROR);
+            } else {
+                print_message("[SHM] Cannot lock " + shm_name + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            close(ecm_fd_);
+            ecm_fd_ = -1;
             umask(mask); return false;
         }
         owns_ecm_ = true;
@@ -271,9 +289,21 @@ public:
         const std::string pd_in  = toPosixName(pdInputName);
         const std::string pd_out = toPosixName(pdOutputName);
 
-        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0660);
+        // Same reclaim-vs-reject logic as createSharedMemory(): no O_TRUNC
+        // until the exclusive flock proves no live owner holds this object.
+        pd_input_fd_ = shm_open(pd_in.c_str(), O_RDWR | O_CREAT, 0660);
         if (pd_input_fd_ < 0) {
             print_message("[SHM] Cannot create " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
+            return false;
+        }
+        if (flock(pd_input_fd_, LOCK_EX | LOCK_NB) != 0) {
+            if (errno == EWOULDBLOCK) {
+                print_message("[SHM] " + pd_in + " is owned by a running master (master id already active)", MessageLevel::ERROR);
+            } else {
+                print_message("[SHM] Cannot lock " + pd_in + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            close(pd_input_fd_);
+            pd_input_fd_ = -1;
             return false;
         }
         owns_pd_input_ = true;
@@ -291,9 +321,20 @@ public:
         }
         pd_input_size_ = static_cast<std::size_t>(pdInputSize);
 
-        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0660);
+        pd_output_fd_ = shm_open(pd_out.c_str(), O_RDWR | O_CREAT, 0660);
         if (pd_output_fd_ < 0) {
             print_message("[SHM] Cannot create " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
+            rollbackOwnedPdInput();
+            return false;
+        }
+        if (flock(pd_output_fd_, LOCK_EX | LOCK_NB) != 0) {
+            if (errno == EWOULDBLOCK) {
+                print_message("[SHM] " + pd_out + " is owned by a running master (master id already active)", MessageLevel::ERROR);
+            } else {
+                print_message("[SHM] Cannot lock " + pd_out + ": " + std::strerror(errno), MessageLevel::ERROR);
+            }
+            close(pd_output_fd_);
+            pd_output_fd_ = -1;
             rollbackOwnedPdInput();
             return false;
         }

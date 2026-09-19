@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
+#include <sys/file.h>
 #include <thread>
 #include <vector>
 
@@ -258,6 +259,9 @@ bool testPdRollbackOnPartialFailure() {
     const int blocker = shm_open(blocked_output_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
     CHECK(blocker >= 0);
     CHECK(ftruncate(blocker, 16) == 0);
+    // Hold the same exclusive flock a live owner would, so this simulates a
+    // running process rather than a reclaimable crash leftover.
+    CHECK(flock(blocker, LOCK_EX | LOCK_NB) == 0);
 
     CHECK(!owner.createPdDataMemoryProvider(16, 16));
     CHECK(!sharedMemoryExists(sharedMemoryName("pd_input", id)));
@@ -267,6 +271,34 @@ bool testPdRollbackOnPartialFailure() {
     CHECK(shm_unlink(blocked_output_name.c_str()) == 0);
     return true;
 }
+
+bool testStaleSharedMemoryIsReclaimed() {
+    const int id = uniqueMasterId();
+
+    // Simulate objects left behind by a crashed master: they exist on disk
+    // but no process holds a lock on them, so a fresh master must be able to
+    // reclaim every one of them instead of treating them as a live owner.
+    const int stale_ecm = shm_open(sharedMemoryName(EC_SHM, id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    CHECK(stale_ecm >= 0);
+    CHECK(ftruncate(stale_ecm, 16) == 0);
+    CHECK(close(stale_ecm) == 0);
+
+    const int stale_pd_input = shm_open(sharedMemoryName("pd_input", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    CHECK(stale_pd_input >= 0);
+    CHECK(ftruncate(stale_pd_input, 16) == 0);
+    CHECK(close(stale_pd_input) == 0);
+
+    const int stale_pd_output = shm_open(sharedMemoryName("pd_output", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    CHECK(stale_pd_output >= 0);
+    CHECK(ftruncate(stale_pd_output, 16) == 0);
+    CHECK(close(stale_pd_output) == 0);
+
+    rocos::SharedMemoryConfig owner(id);
+    CHECK(owner.createSharedMemory());
+    CHECK(owner.createPdDataMemoryProvider(16, 16));
+    return true;
+}
+
 
 bool testConcurrentWaitRegistration() {
     const int id = uniqueMasterId();
@@ -983,6 +1015,9 @@ int main() {
         return EXIT_FAILURE;
     }
     if (!testPdRollbackOnPartialFailure()) {
+        return EXIT_FAILURE;
+    }
+    if (!testStaleSharedMemoryIsReclaimed()) {
         return EXIT_FAILURE;
     }
     if (!testConcurrentWaitRegistration()) {
