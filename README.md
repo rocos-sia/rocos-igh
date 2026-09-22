@@ -72,6 +72,10 @@ identity to IgH for strict matching.
 - [EtherCAT terminal commands](docs/ethercat-terminal-commands.md)
 
 
+启用 DC 时，激活前设置初始单调时间、激活后立即刷新，以避免 DC 偏移初始化时
+尚未收到应用时间。周期 deadline 沿用首次时间的相位，初始化耗时只跳过周期。
+此处理针对本机 IgH 1.6 的 APP_TIME 实现，详见 [API 指南](docs/api-guide.md)。
+
 ### 启动状态确认
 
 启动时先逐个查询配置中的从站，等待全部处于无错误的 PREOP，连续确认 5 次后才进行 PDO/DC 等配置（轮询间隔 10 ms，默认超时 5000 ms，可用 `--preop-timeout-ms` 配置）。激活成功仅表示配置已提交，不表示从站已经进入 OP。

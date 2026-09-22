@@ -298,10 +298,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
-    // Application time is first supplied by the cyclic task's deadline, so
-    // IgH's DC phase origin and the application's schedule share one epoch.
-    if (ecrt_master_activate(master_) != 0) {
-        error = "failed to activate EtherCAT master";
+    if (!activateWithDcTime(dc_runtime.enabled, error)) {
         reset();
         return false;
     }
@@ -335,6 +332,43 @@ bool EthercatMaster::initialize(unsigned int master_id,
     dc_enabled_ = dc_runtime.enabled;
     initialized_ = true;
     return true;
+}
+
+// IgH 1.6's APP_TIME ioctl accepts a reserved, inactive master. Seed before
+// activation so its asynchronous DC offset setup cannot see dc_ref_time == 0.
+// Retain that first timestamp as the phase origin for the cyclic scheduler.
+bool EthercatMaster::activateWithDcTime(bool dc_enabled, std::string &error) {
+    error.clear();
+    dc_phase_origin_ns_ = 0;
+    const auto supply_time = [&](bool initial) {
+        timespec now{};
+        if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            error = std::string("failed to read DC time ") +
+                    (initial ? "before" : "after") + " activation: " + std::strerror(errno);
+            return false;
+        }
+        const auto time = static_cast<std::uint64_t>(now.tv_sec) * 1000000000ULL +
+                          static_cast<std::uint64_t>(now.tv_nsec);
+        const int rc = ecrt_master_application_time(master_, time);
+        if (rc != 0) {
+            recordDcError(DcErrorStage::ApplicationTime, rc);
+            error = std::string("failed to set DC time ") +
+                    (initial ? "before" : "after") + " activation: rc=" + std::to_string(rc);
+            return false;
+        }
+        if (initial) {
+            dc_phase_origin_ns_ = time;
+        }
+        return true;
+    };
+    if (dc_enabled && !supply_time(true)) {
+        return false;
+    }
+    if (ecrt_master_activate(master_) != 0) {
+        error = "failed to activate EtherCAT master";
+        return false;
+    }
+    return !dc_enabled || supply_time(false);
 }
 
 bool EthercatMaster::slaveReadyForConfiguration(const ec_slave_info_t &slave_info) noexcept {
@@ -611,6 +645,7 @@ void EthercatMaster::reset() noexcept {
     input_domain_ = nullptr;
     output_domain_ = nullptr;
     dc_enabled_ = false;
+    dc_phase_origin_ns_ = 0;
     initialized_ = false;
 
     if (master_ != nullptr) {

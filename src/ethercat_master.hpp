@@ -105,6 +105,8 @@ public:
     bool initialized() const noexcept;
     /// @brief Returns the last realtime DC API failure without allocation.
     DcError lastDcError() const noexcept;
+    /// Initial monotonic DC time; cyclic deadlines must retain this phase.
+    std::uint64_t dcPhaseOriginNs() const noexcept { return dc_phase_origin_ns_; }
 
 private:
     friend struct EthercatMasterTestPeer;
@@ -119,6 +121,7 @@ private:
         const std::function<void()> &wait,
         std::size_t max_attempts,
         const std::function<bool()> &expired = {});
+    bool activateWithDcTime(bool dc_enabled, std::string &error);
     void recordDcError(DcErrorStage stage, int error_code) noexcept;
     void reset() noexcept;
 
@@ -131,6 +134,7 @@ private:
     std::size_t input_size_{0};
     std::size_t output_size_{0};
     bool dc_enabled_{false};
+    std::uint64_t dc_phase_origin_ns_{0};
     DcError last_dc_error_{};
     bool initialized_{false};
 };

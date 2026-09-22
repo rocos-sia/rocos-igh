@@ -494,11 +494,17 @@ SYNC0 周期由 `--period-us` 换算为纳秒。启用后若没有且仅有一�
 若使用分布式时钟同步:
 
 ```c
-// 激活前:配置各从站 DC、选择参考时钟，不设置应用时间
+// 激活前:配置各从站 DC、选择参考时钟
 ecrt_slave_config_dc(sc, assign, sync0_cycle, sync0_shift,
                      sync1_cycle, sync1_shift);
 ecrt_master_select_reference_clock(master, dc_ref_sc);
+// 本机 IgH 1.6 实现允许已申请主站在激活前设置时间。
+clock_gettime(CLOCK_MONOTONIC, &now);
+phase_origin_ns = TIMESPEC2NS(now);
+ecrt_master_application_time(master, phase_origin_ns);
 ecrt_master_activate(master);
+clock_gettime(CLOCK_MONOTONIC, &now);
+ecrt_master_application_time(master, TIMESPEC2NS(now));
 
 // 运行期:从首个周期起，以目标唤醒时间设置应用时间。
 ecrt_master_application_time(master, deadline_ns);
@@ -510,7 +516,11 @@ ecrt_master_send(master);
 ```
 
 - 首次应用时间会成为 IgH 的 `dc_ref_time`，必须与周期调度共用相位基准。
-  当前从周期目标 deadline 开始设置，不在激活前后使用独立时间播种。
+  当前在激活前以 CLOCK_MONOTONIC 播种，激活后立即刷新应用时间；后续 deadline
+  取 `phase_origin_ns + N * period_ns`，跳过初始化期间已过的周期，不改变相位。
+  此处激活前调用是针对本机 IgH 1.6 实现的兼容处理：APP_TIME ioctl 仅要求主站已申请，
+  内核设置 app_time/首次 dc_ref_time，不发送报文。它不同于通用 API 文档的 master_op
+  阶段约定；更换 IgH 实现时需重新核实。
 - 参考时钟校准使用发送前的实际单调时间，避免把周期处理耗时混入校准值。
 - 激活后不进行固定时长的睡眠等待；应用通过周期收发推动配置与状态切换。
 - 当前周期顺序为 application time → receive/process → PDO 复制/状态 →

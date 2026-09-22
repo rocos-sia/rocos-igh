@@ -175,6 +175,14 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     }
 
     timespec deadline = fromNanoseconds(toNanoseconds(now) + (static_cast<std::int64_t>(period_us_) * 1000LL));
+    if (master_.dcPhaseOriginNs() != 0U) {
+        // Activation/IPC setup may span many periods. Skip them without shifting
+        // the phase established by IgH's first application-time sample.
+        std::uint64_t skipped = 0;
+        deadline = advanceDeadline(
+            fromNanoseconds(static_cast<std::int64_t>(master_.dcPhaseOriginNs())),
+            period_us_, now, skipped);
+    }
     timespec last_wake = now;
 
     // Keep exchanging zero-initialized domain data until every configured
