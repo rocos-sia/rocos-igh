@@ -24,8 +24,9 @@ namespace rocos {
 struct EthercatMasterTestPeer {
     static bool waitPreop(const StaticSlaveConfig &config, std::string &error,
         const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
-        const std::function<void()> &wait, std::size_t attempts) {
-        return EthercatMaster::waitForSlavesInPreop(config, error, query, wait, attempts);
+        const std::function<void()> &wait, std::size_t attempts,
+        const std::function<bool()> &expired = {}) {
+        return EthercatMaster::waitForSlavesInPreop(config, error, query, wait, attempts, expired);
     }
     static void seed(EthercatMaster &master) {
         master.initialized_ = true;
@@ -57,6 +58,17 @@ int main() {
     CHECK(timeout.observe(10000000100LL, true) == Result::TimedOut);
     rocos::StartupWait late_wake(0);
     CHECK(late_wake.observe(20000000000LL, false) == Result::TimedOut);
+
+    rocos::StartupWait custom_timeout(100, 30000U);
+    CHECK(custom_timeout.observe(10000000100LL, false) == Result::Waiting);
+    CHECK(custom_timeout.observe(30000000099LL, false) == Result::Waiting);
+    CHECK(custom_timeout.observe(30000000100LL, true) == Result::TimedOut);
+    rocos::StartupWait short_timeout(0, 1U);
+    CHECK(short_timeout.observe(999999LL, false) == Result::Waiting);
+    CHECK(short_timeout.observe(1000000LL, true) == Result::TimedOut);
+    rocos::StartupWait max_timeout(0, UINT32_MAX);
+    CHECK(max_timeout.observe(4294967295000000LL - 1, false) == Result::Waiting);
+    CHECK(max_timeout.observe(4294967295000000LL, false) == Result::TimedOut);
 
     rocos::EthercatMaster master;
     bool ready = true;
@@ -96,6 +108,23 @@ int main() {
     round = 0;
     CHECK(!rocos::EthercatMasterTestPeer::waitPreop(
         config, error, preop_query, [&] { ++round; }, 8));
+
+    // A slow query consumes the timeout, including the fifth healthy poll.
+    std::int64_t elapsed_ms = 0;
+    const auto slow_query = [&](std::uint16_t, ec_slave_info_t &info) {
+        info.al_state = EC_AL_STATE_PREOP;
+        info.error_flag = 0;
+        elapsed_ms += 3;
+        return 0;
+    };
+    const auto fake_wait = [&] { elapsed_ms += 10; };
+    CHECK(!rocos::EthercatMasterTestPeer::waitPreop(
+        config, error, slow_query, fake_wait, 100, [&] { return elapsed_ms >= 70; }));
+    CHECK(elapsed_ms == 70);
+    CHECK(error.find("timed out") != std::string::npos);
+    elapsed_ms = 0;
+    CHECK(rocos::EthercatMasterTestPeer::waitPreop(
+        config, error, slow_query, fake_wait, 100, [&] { return elapsed_ms >= 71; }));
 
     // Complete WCs alone must not mark a SAFEOP/mixed-state bus healthy.
     rocos::CycleStatistics statistics{};

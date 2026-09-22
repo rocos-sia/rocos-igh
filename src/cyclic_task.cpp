@@ -158,14 +158,14 @@ void updateSharedBus(const BusState &state,
 }
 
 // Binds the task to an initialized master and mapped IPC for the given period.
-CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us) noexcept
-    : master_(master), ipc_(ipc), period_us_(period_us) {}
+CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us, std::uint32_t op_timeout_ms) noexcept
+    : master_(master), ipc_(ipc), period_us_(period_us), op_timeout_ms_(op_timeout_ms) {}
 
 // Runs the absolute-time cyclic loop until stop_requested is set. Each wake
 // performs receive/process, the two fixed-buffer copies, state publication,
 // queue/send, and client notification, then advances the deadline.
 int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
-    if (period_us_ < kMinPeriodUs) {
+    if (period_us_ < kMinPeriodUs || op_timeout_ms_ == 0U) {
         return EINVAL;
     }
 
@@ -180,7 +180,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     // Keep exchanging zero-initialized domain data until every configured
     // slave is OP and both working counters are complete for five polls.
     // No shared output is consumed and no client is notified during startup.
-    StartupWait startup(toNanoseconds(now));
+    StartupWait startup(toNanoseconds(now), op_timeout_ms_);
     bool startup_ready = false;
     while (!startup_ready && !stop_requested) {
         int sleep_rc = 0;
@@ -225,7 +225,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         const auto result = startup.observe(toNanoseconds(wake_time), healthy);
         if (result == StartupWait::Result::TimedOut) {
             std::cerr << "[CyclicTask] Timed out waiting for all slaves in OP and complete WCs"
-                      << ": all_op=" << all_operational << " link=" << state.link_up
+                      << " (timeout_ms=" << op_timeout_ms_ << "): all_op=" << all_operational << " link=" << state.link_up
                       << " responding=" << state.responding_slaves
                       << " input_wc=" << state.input_working_counter
                       << " output_wc=" << state.output_working_counter << '\n';
@@ -322,12 +322,12 @@ void updateSharedBus(const BusState &,
                      EcatBus &) noexcept {}
 
 // Binds the task to an initialized master and mapped IPC for the given period.
-CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us) noexcept
-    : master_(master), ipc_(ipc), period_us_(period_us) {}
+CyclicTask::CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us, std::uint32_t op_timeout_ms) noexcept
+    : master_(master), ipc_(ipc), period_us_(period_us), op_timeout_ms_(op_timeout_ms) {}
 
 // Rejects sub-1ms periods, then reports the feature as unsupported.
 int CyclicTask::run(volatile std::sig_atomic_t &) noexcept {
-    if (period_us_ < kMinPeriodUs) {
+    if (period_us_ < kMinPeriodUs || op_timeout_ms_ == 0U) {
         return EINVAL;
     }
     return ENOTSUP;

@@ -72,13 +72,15 @@ public:
      * @param master_id IgH master index to request.
      * @param config    Validated static slave configuration.
      * @param error     Receives a description of the first failure.
+     * @param preop_timeout_ms Total PREOP readiness timeout in milliseconds (positive).
      * @return True on success.
      */
     bool initialize(unsigned int master_id,
                     StaticSlaveConfig config,
                     bool dc_enabled,
                     std::uint32_t period_us,
-                    std::string &error);
+                    std::string &error,
+                    std::uint32_t preop_timeout_ms = 5000U);
     /// @brief Receives a frame and processes both domains (rt_safe).
     void receiveAndProcess() noexcept;
     /// @brief Sets the DC application time for the current cycle (rt_safe).
@@ -109,13 +111,14 @@ private:
 
     static bool slaveReadyForConfiguration(const ec_slave_info_t &slave_info) noexcept;
     bool waitForSlavesInPreop(const StaticSlaveConfig &config,
-                              std::string &error);
+                              std::string &error, std::uint32_t timeout_ms);
     static bool waitForSlavesInPreop(
         const StaticSlaveConfig &config,
         std::string &error,
         const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
         const std::function<void()> &wait,
-        std::size_t max_attempts);
+        std::size_t max_attempts,
+        const std::function<bool()> &expired = {});
     void recordDcError(DcErrorStage stage, int error_code) noexcept;
     void reset() noexcept;
 

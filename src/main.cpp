@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
     rocos::EthercatMaster master; // RAII 封装一个 IgH 主站
     if (!master.initialize(options.master_id, config, options.dc_enabled,
-                           options.period_us, error)) { // 配置或激活失败
+                           options.period_us, error, options.preop_timeout_ms)) { // 配置或激活失败
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
@@ -178,7 +178,7 @@ int main(int argc, char **argv) {
     }
 
     // —— 第八步：运行周期任务直到收到停止信号 ——
-    rocos::CyclicTask cyclic_task(master, ipc, options.period_us); // 绑定主站、IPC 与周期
+    rocos::CyclicTask cyclic_task(master, ipc, options.period_us, options.op_timeout_ms); // 绑定主站、IPC 与周期
     const int run_result = cyclic_task.run(g_stop_requested);      // 阻塞运行，直到停止标志置位
     printFinalStatistics(cyclic_task.statistics(), run_result);    // 循环结束后输出统计
 

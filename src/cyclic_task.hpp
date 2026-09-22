@@ -90,8 +90,9 @@ public:
      * @param master    Initialized EtherCAT master.
      * @param ipc       Mapped shared-memory configuration.
      * @param period_us Cycle period in microseconds (must be >= 1000).
+     * @param op_timeout_ms Total OP readiness timeout in milliseconds (positive).
      */
-    CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us) noexcept;
+    CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us, std::uint32_t op_timeout_ms = 10000U) noexcept;
 
     /**
      * @brief Runs the cyclic loop until @p stop_requested is set.
@@ -109,6 +110,7 @@ private:
     EthercatMaster &master_;
     SharedMemoryConfig &ipc_;
     std::uint32_t period_us_;
+    std::uint32_t op_timeout_ms_;
     CycleStatistics statistics_{};
 };
 

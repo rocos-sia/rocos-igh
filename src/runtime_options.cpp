@@ -29,7 +29,7 @@ bool parseUnsigned(std::string_view text, std::uint64_t &value) noexcept {
 
 }  // namespace
 
-// Parses --master-id/--period-us/--help strictly, rejecting unknown flags,
+// Parses runtime options strictly, rejecting unknown flags,
 // missing values, signs, and out-of-range integers without any EtherCAT side effect.
 bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error) {
     error.clear();
@@ -38,6 +38,8 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
     bool master_id_seen = false;
     bool period_us_seen = false;
     bool dc_seen = false;
+    bool preop_timeout_seen = false;
+    bool op_timeout_seen = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag(argv[i]);
@@ -46,7 +48,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             continue;
         }
         if (flag != "--config" && flag != "--master-id" && flag != "--period-us" &&
-            flag != "--dc") {
+            flag != "--dc" && flag != "--preop-timeout-ms" && flag != "--op-timeout-ms") {
             error = "unknown option: " + std::string(flag);
             return false;
         }
@@ -94,6 +96,22 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             return false;
         }
 
+        if (flag == "--preop-timeout-ms" || flag == "--op-timeout-ms") {
+            bool &seen = flag == "--preop-timeout-ms" ? preop_timeout_seen : op_timeout_seen;
+            if (seen) {
+                error = "duplicate option: " + std::string(flag);
+                return false;
+            }
+            if (parsed_value == 0 || parsed_value > std::numeric_limits<std::uint32_t>::max()) {
+                error = "timeout must be in [1, 4294967295] ms for option: " + std::string(flag);
+                return false;
+            }
+            auto &timeout = flag == "--preop-timeout-ms" ? options.preop_timeout_ms : options.op_timeout_ms;
+            timeout = static_cast<std::uint32_t>(parsed_value);
+            seen = true;
+            continue;
+        }
+
         if (flag == "--master-id") {
             if (master_id_seen) {
                 error = "duplicate option: --master-id";
@@ -139,7 +157,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--help]";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nPREOP timeout default: 5000 ms; OP timeout default: 10000 ms; both must be positive integers.";
 }
 
 }  // namespace rocos

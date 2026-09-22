@@ -416,6 +416,35 @@ bool testRuntimeOptions() {
     CHECK(options.config_path == "config/pdo.yaml");
     CHECK(!options.dc_enabled);
 
+    CHECK(options.preop_timeout_ms == 5000U);
+    CHECK(options.op_timeout_ms == 10000U);
+    char preop_flag[] = "--preop-timeout-ms";
+    char op_flag[] = "--op-timeout-ms";
+    char preop_value[] = "30000";
+    char op_value[] = "60000";
+    char *timeouts[]{program, config_flag, config_value, preop_flag, preop_value, op_flag, op_value};
+    CHECK(rocos::parseRuntimeOptions(7, timeouts, options, error));
+    CHECK(options.preop_timeout_ms == 30000U && options.op_timeout_ms == 60000U);
+    for (char *flag : {preop_flag, op_flag}) {
+        for (std::string value : {"0", "-1", "+1", "1.5", "abc", "1ms", "4294967296", "18446744073709551616"}) {
+            char *args[]{program, config_flag, config_value, flag, value.data()};
+            CHECK(!rocos::parseRuntimeOptions(5, args, options, error));
+            CHECK(error.find(flag) != std::string::npos);
+        }
+        for (std::string value : {"1", "4294967295"}) {
+            char *args[]{program, config_flag, config_value, flag, value.data()};
+            CHECK(rocos::parseRuntimeOptions(5, args, options, error));
+            CHECK((flag == preop_flag ? options.preop_timeout_ms : options.op_timeout_ms) == std::stoull(value));
+        }
+        char *missing[]{program, config_flag, config_value, flag};
+        CHECK(!rocos::parseRuntimeOptions(4, missing, options, error));
+        char *duplicate[]{program, config_flag, config_value, flag, preop_value, flag, op_value};
+        CHECK(!rocos::parseRuntimeOptions(7, duplicate, options, error));
+        CHECK(error.find("duplicate") != std::string::npos);
+    }
+    CHECK(rocos::parseRuntimeOptions(7, valid, options, error));
+    CHECK(options.preop_timeout_ms == 5000U && options.op_timeout_ms == 10000U);
+
     char dc_flag[] = "--dc";
     char dc_on[] = "on";
     char *dc_enabled[]{program, config_flag, config_value, dc_flag, dc_on};

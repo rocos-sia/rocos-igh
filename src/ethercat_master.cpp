@@ -2,6 +2,8 @@
 
 #include "shared_memory_config.hpp"
 
+#include <algorithm>
+#include <limits>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
@@ -16,7 +18,6 @@ namespace rocos {
 namespace {
 
 constexpr auto kPreopPollInterval = std::chrono::milliseconds(10);
-constexpr std::size_t kPreopMaxAttempts = 500U;
 // Number of consecutive all-PREOP polls required before proceeding with
 // PDO configuration. This guards against the IgH kernel module transiently
 // setting error_flag while driving a slave from OP back to PREOP: the slave
@@ -61,10 +62,15 @@ bool EthercatMaster::initialize(unsigned int master_id,
                                 StaticSlaveConfig config,
                                 bool dc_enabled,
                                 std::uint32_t period_us,
-                                std::string &error) {
+                                std::string &error,
+                                std::uint32_t preop_timeout_ms) {
     error.clear();
     last_dc_error_ = DcError{};
 
+    if (preop_timeout_ms == 0U) {
+        error = "PREOP timeout must be positive";
+        return false;
+    }
     if (initialized_) {
         error = "master already initialized";
         return false;
@@ -109,7 +115,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
             }
         }
     }
-    if (!waitForSlavesInPreop(config, error)) {
+    if (!waitForSlavesInPreop(config, error, preop_timeout_ms)) {
         reset();
         return false;
     }
@@ -336,12 +342,22 @@ bool EthercatMaster::slaveReadyForConfiguration(const ec_slave_info_t &slave_inf
 }
 
 bool EthercatMaster::waitForSlavesInPreop(const StaticSlaveConfig &config,
-                                          std::string &error) {
+                                          std::string &error, std::uint32_t timeout_ms) {
     const auto query = [this](std::uint16_t position, ec_slave_info_t &slave_info) {
         return ecrt_master_get_slave(master_, position, &slave_info);
     };
-    const auto wait = [] { std::this_thread::sleep_for(kPreopPollInterval); };
-    return waitForSlavesInPreop(config, error, query, wait, kPreopMaxAttempts);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    const auto expired = [&] { return std::chrono::steady_clock::now() >= deadline; };
+    const auto wait = [&] {
+        std::this_thread::sleep_until(std::min(deadline,
+            std::chrono::steady_clock::now() + kPreopPollInterval));
+    };
+    const bool ready = waitForSlavesInPreop(config, error, query, wait,
+                                           std::numeric_limits<std::size_t>::max(), expired);
+    if (!ready) {
+        error += " (PREOP timeout_ms=" + std::to_string(timeout_ms) + ")";
+    }
+    return ready;
 }
 
 bool EthercatMaster::waitForSlavesInPreop(
@@ -349,7 +365,8 @@ bool EthercatMaster::waitForSlavesInPreop(
     std::string &error,
     const std::function<int(std::uint16_t, ec_slave_info_t &)> &query,
     const std::function<void()> &wait,
-    std::size_t max_attempts) {
+    std::size_t max_attempts,
+    const std::function<bool()> &expired) {
     error.clear();
     std::size_t stable_count = 0;
 
@@ -367,6 +384,9 @@ bool EthercatMaster::waitForSlavesInPreop(
 
     bool first_all_ready_seen = false;
     for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
+        if (expired && expired()) {
+            break;
+        }
         bool all_ready = true;
         for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
             const SlaveSpec &slave = config.slaves[slave_index];
@@ -381,6 +401,9 @@ bool EthercatMaster::waitForSlavesInPreop(
             }
         }
 
+        if (expired && expired()) {
+            break;
+        }
         if (all_ready) {
             // Require kPreopStableConfirmations consecutive all-ready polls before
             // proceeding. The IgH kernel module may briefly set error_flag while
@@ -408,7 +431,7 @@ bool EthercatMaster::waitForSlavesInPreop(
             // Log not-ready slaves every 50 attempts during the wait.
             if (attempt % 50U == 0U) {
                 std::cout << "[EthercatMaster] Waiting for PREOP (attempt "
-                          << attempt << "/" << max_attempts << "):";
+                          << attempt << "):";
                 for (const PendingEntry &entry : pending) {
                     if (!slaveReadyForConfiguration(entry.info)) {
                         std::cout << " slave[" << entry.index << "]="

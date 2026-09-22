@@ -12,6 +12,8 @@ struct RuntimeOptions {
     unsigned int master_id{0};     ///< Non-negative EtherCAT master index.
     std::uint32_t period_us{1000}; ///< Cycle period in microseconds (>= 1000).
     std::string config_path;       ///< Required PDO YAML configuration path.
+    std::uint32_t preop_timeout_ms{10000}; ///< PREOP startup timeout [ms], positive.
+    std::uint32_t op_timeout_ms{20000}; ///< OP startup timeout [ms], positive.
     bool dc_enabled{false};        ///< True when Distributed Clocks are enabled.
     bool show_help{false};         ///< True when --help was requested.
 };
@@ -19,7 +21,8 @@ struct RuntimeOptions {
 /**
  * @brief Parses argv strictly into @p options.
  *
- * Accepts --config, --master-id, --period-us, --dc, and --help. Rejects unknown
+ * Accepts --config, --master-id, --period-us, --dc, --preop-timeout-ms,
+ * --op-timeout-ms, and --help. Rejects unknown
  * flags, missing values, duplicates, signs, trailing characters, and overflow.
  *
  * @param argc    Argument count.
