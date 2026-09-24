@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
@@ -106,12 +107,17 @@ public:
      */
     const CycleStatistics &statistics() const noexcept;
 
+    std::uint64_t startupOpMask() const noexcept { return startup_op_mask_.load(); }
+    bool startupReady() const noexcept { return startup_ready_.load(); }
+
 private:
     EthercatMaster &master_;
     SharedMemoryConfig &ipc_;
     std::uint32_t period_us_;
     std::uint32_t op_timeout_ms_;
     CycleStatistics statistics_{};
+    std::atomic<std::uint64_t> startup_op_mask_{0};
+    std::atomic<bool> startup_ready_{false};
 };
 
 }  // namespace rocos

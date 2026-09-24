@@ -15,6 +15,9 @@
 #include "slave_config.hpp"         // 动态 IgH 配置所有权（LoadedSlaveConfig）
 
 // 标准库与系统头文件。
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <array>       // std::array（预触碰栈缓冲区）
 #include <cstdlib>     // EXIT_SUCCESS / EXIT_FAILURE
 #include <cerrno>      // errno（错误码）
@@ -171,15 +174,58 @@ int main(int argc, char **argv) {
     ipc.ecatBus->is_authorized = false;           // 尚未完成健康检查
     ipc.ecatBus->timestamp = 0;                   // 时间戳清零
 
+    // Start the reporter before SCHED_FIFO/mlockall; only this normal-priority
+    // thread formats startup progress. The cyclic path publishes lock-free data.
+    rocos::CyclicTask cyclic_task(master, ipc, options.period_us, options.op_timeout_ms);
+    std::atomic<bool> reporter_stop{false};
+    std::thread reporter;
+    try {
+        reporter = std::thread([&] {
+            auto next_report = std::chrono::steady_clock::now();
+            for (;;) {
+                const bool stopped = reporter_stop.load();
+                if (cyclic_task.startupReady()) {
+                    std::cout << "[master " << options.master_id
+                              << "] 全部从站就绪，可以开始工作（全部进入 OP，链路及输入/输出工作计数器连续 5 次检查正常）"
+                              << std::endl;
+                    return;
+                }
+                if (stopped) return;
+                const auto now = std::chrono::steady_clock::now();
+                const auto mask = cyclic_task.startupOpMask();
+                if (now >= next_report) {
+                    std::cout << "[master " << options.master_id << "] 等待 OP，当前已进入 OP 的从站：";
+                    std::size_t count = 0;
+                    for (std::size_t i = 0; i < config.slave_count; ++i) {
+                        if ((mask & (std::uint64_t{1} << i)) == 0) continue;
+                        std::cout << " [id=" << config.slaves[i].position
+                                  << ", name=" << config.slaves[i].name << "]";
+                        ++count;
+                    }
+                    if (count == 0) std::cout << " 无";
+                    std::cout << " (" << count << '/' << config.slave_count << ")" << std::endl;
+                    next_report = now + std::chrono::seconds(1);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        });
+    } catch (const std::exception &exception) {
+        std::cerr << "failed to start OP reporter: " << exception.what() << '\n';
+        return EXIT_FAILURE;
+    }
+
     // —— 第七步：配置实时环境（锁内存、预触碰、SCHED_FIFO）——
     if (!configureRealtime(error)) {
+        reporter_stop.store(true);
+        reporter.join();
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
 
     // —— 第八步：运行周期任务直到收到停止信号 ——
-    rocos::CyclicTask cyclic_task(master, ipc, options.period_us, options.op_timeout_ms); // 绑定主站、IPC 与周期
     const int run_result = cyclic_task.run(g_stop_requested);      // 阻塞运行，直到停止标志置位
+    reporter_stop.store(true);
+    reporter.join();
     printFinalStatistics(cyclic_task.statistics(), run_result);    // 循环结束后输出统计
 
     if (run_result != 0) { // 周期任务以错误码结束（如时钟调用失败）

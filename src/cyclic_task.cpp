@@ -222,10 +222,19 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         master_.receiveAndProcess();
         const BusState state = master_.readState();
 
+        static_assert(MAX_SLAVE_NUM <= 64, "Startup OP snapshot must fit in 64 bits");
+        static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+        static_assert(std::atomic<bool>::is_always_lock_free);
+        bool ready_states[MAX_SLAVE_NUM]{};
         bool all_operational = false;
-        if (master_.pollSlaves(EC_AL_STATE_OP, all_operational) != 0) {
+        if (master_.pollSlaves(EC_AL_STATE_OP, all_operational, ready_states, MAX_SLAVE_NUM) != 0) {
             return EIO;
         }
+        std::uint64_t op_mask = 0;
+        for (std::size_t i = 0; i < master_.slaveCount() && i < MAX_SLAVE_NUM; ++i) {
+            if (ready_states[i]) op_mask |= std::uint64_t{1} << i;
+        }
+        startup_op_mask_.store(op_mask);
         const bool healthy = all_operational && state.link_up &&
                              state.responding_slaves == master_.slaveCount() &&
                              state.input_wc_state == EC_WC_COMPLETE &&
@@ -255,8 +264,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     if (stop_requested) {
         return 0;
     }
-    std::cout << "[CyclicTask] All configured slaves reached OP; "
-                 "link and input/output working counters stable for 5 polls\n";
+    startup_ready_.store(true);
 
     while (!stop_requested) {
         int sleep_rc = 0;

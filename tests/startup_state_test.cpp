@@ -91,6 +91,24 @@ int main() {
     // A failure at slave 0 must not skip polling slave 1.
     CHECK(queries[0] == 5 && queries[1] == 5);
 
+    // Snapshot includes only online, operational OP slaves, and respects capacity.
+    bool snapshot[3]{false, false, true};
+    results[0] = 0;
+    states[1] = {1, 0, EC_AL_STATE_SAFEOP};
+    CHECK(master.pollSlaves(EC_AL_STATE_OP, ready, snapshot, 2) == 0 && !ready);
+    CHECK(snapshot[0] && !snapshot[1] && snapshot[2]);
+    states[0].online = 0;
+    states[1] = {1, 1, EC_AL_STATE_OP};
+    CHECK(master.pollSlaves(EC_AL_STATE_OP, ready, snapshot, 2) == 0 && !ready);
+    CHECK(!snapshot[0] && snapshot[1]);
+    states[0].online = 1;
+    results[1] = -EIO;
+    CHECK(master.pollSlaves(EC_AL_STATE_OP, ready, snapshot, 2) == -EIO && !ready);
+    CHECK(snapshot[0] && !snapshot[1]);
+    snapshot[1] = true;
+    CHECK(master.pollSlaves(EC_AL_STATE_OP, ready, snapshot, 1) == -EIO);
+    CHECK(snapshot[1]);
+
     // PREOP must be simultaneous, error-free, and stable before configuration.
     rocos::SlaveSpec slaves[2]{};
     slaves[1].position = 1;

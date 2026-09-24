@@ -585,7 +585,13 @@ BusState EthercatMaster::readState() noexcept {
 }
 
 int EthercatMaster::pollSlaves(ec_al_state_t target, bool &all_ready) noexcept {
+    return pollSlaves(target, all_ready, nullptr, 0);
+}
+
+int EthercatMaster::pollSlaves(ec_al_state_t target, bool &all_ready,
+                               bool *ready_states, std::size_t capacity) noexcept {
     all_ready = initialized_ && !slave_configs_.empty();
+    std::size_t index = 0;
     int first_error = 0;
     for (const auto *sc : slave_configs_) {
         ec_slave_config_state_t state{};
@@ -593,8 +599,13 @@ int EthercatMaster::pollSlaves(ec_al_state_t target, bool &all_ready) noexcept {
         if (rc != 0 && first_error == 0) {
             first_error = rc;
         }
-        if (rc != 0 || !state.online || state.al_state != target ||
-            (target == EC_AL_STATE_OP && !state.operational)) {
+        const bool ready = rc == 0 && state.online && state.al_state == target &&
+                           (target != EC_AL_STATE_OP || state.operational);
+        if (ready_states != nullptr && index < capacity) {
+            ready_states[index] = ready;
+        }
+        ++index;
+        if (!ready) {
             all_ready = false;
         }
     }

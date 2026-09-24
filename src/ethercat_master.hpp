@@ -91,6 +91,9 @@ public:
     BusState readState() noexcept;
     /// Queries every configured slave using rt_safe APIs; never short-circuits.
     int pollSlaves(ec_al_state_t target, bool &all_ready) noexcept;
+    /// Optional caller-owned per-slave readiness snapshot (configuration order).
+    int pollSlaves(ec_al_state_t target, bool &all_ready, bool *ready_states,
+                   std::size_t capacity) noexcept;
     std::size_t slaveCount() const noexcept { return slave_configs_.size(); }
 
     /// @brief Returns the input-domain process-data base pointer.
