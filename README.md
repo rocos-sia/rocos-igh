@@ -44,16 +44,46 @@ The executable is `rocos_igh_master` and supports:
 - `--dc <on|off>` (default: `off`)
 - `--help`
 
+### 每次启动前关闭 EoE
+
+每次启动主站应用前，先运行 [关闭 EoE 脚本](scripts/disable-eoe.sh)，再启动
+`rocos_igh_master`。七轴 Elmo 总线已验证：EoE 邮箱访问会干扰 CoE PDO
+Assignment，出现 `Other mailbox protocol response`、`No response` 和
+`Failed to assign PDO 0x1607`；关闭 EoE 后多次启动正常。
+
+在仓库根目录执行，先确保 IgH 服务已就绪、从站扫描完成，且此前的主站应用
+已经退出。脚本和主站命令的 `--master-id` 必须一致；以下以主站 0 为例：
+
 ```bash
+# 可选：预览将关闭的 EoE 虚拟接口，不修改接口状态
+bash scripts/disable-eoe.sh --master-id 0 --dry-run
+```
+
+实际启动时用 `&&` 连接关闭步骤与主站命令，关闭失败时不继续启动：
+
+```bash
+sudo bash scripts/disable-eoe.sh --master-id 0 && \
 ./build-master/rocos_igh_master --config config/pdo.yaml --master-id 0 --period-us 1000
 ```
+
+脚本只关闭指定主站的 `eoe<ID>s<position>` / `eoe<ID>a<alias>` 虚拟接口，
+会中断对应的 EoE/IP 访问，不关闭 EtherCAT 物理网卡。重复执行可以保持接口
+关闭；该操作不持久，系统或 IgH 服务重启、接口重建、网络管理器自动拉起接口
+后可能失效，因此每次启动都执行此步骤。可用 `ip -br link` 确认目标接口为
+DOWN；若被网络管理器重新拉起，需要将这些 EoE 接口设为不受其管理。
+
+脚本提示 `No EoE interfaces found` 时不会修改接口，也会成功退出；若预期
+存在 EoE 接口，应先确认主站 ID 和扫描状态，避免接口在执行脚本后才创建。
+需要恢复 EoE/IP 访问时，在主站应用停止后使用
+`sudo ip link set dev <interface> up` 恢复对应接口。
 
 Distributed Clocks remain disabled unless explicitly enabled. Enabling DC also
 requires device-specific `dc` blocks in the YAML configuration, including
 exactly one reference slave:
 
 ```bash
-./build-master/rocos_igh_master --config config/device.yaml --period-us 1000 --dc on
+sudo bash scripts/disable-eoe.sh --master-id 0 && \
+./build-master/rocos_igh_master --config config/device.yaml --master-id 0 --period-us 1000 --dc on
 ```
 
 The YAML file lists slaves in physical bus order and configures each slave's
@@ -87,7 +117,8 @@ PREOP 和 OP 均按单调时钟计时，查询及调度耗时计入超时。OP �
 例如，为多从站总线设置 PREOP 30 秒、OP 60 秒：
 
 ```bash
-./build-master/rocos_igh_master --config config/talon_pdo.yaml --dc on --preop-timeout-ms 30000 --op-timeout-ms 60000
+sudo bash scripts/disable-eoe.sh --master-id 0 && \
+./build-master/rocos_igh_master --config config/talon_pdo.yaml --master-id 0 --dc on --preop-timeout-ms 30000 --op-timeout-ms 60000
 ```
 
 当前保持标准 IgH 接口：SAFEOP → OP 由 IgH 自动推进，**不提供“全部停留 SAFEOP、检查后再请求 OP”的屏障**。`initialize()` 完成配置与激活，OP 就绪确认在 `CyclicTask::run()` 的启动阶段完成。启动状态测试使用模拟查询，无需硬件；真实从站状态转换仍需单独进行硬件集成验证。
