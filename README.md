@@ -110,9 +110,22 @@ identity to IgH for strict matching.
 
 启动时先逐个查询配置中的从站，等待全部处于无错误的 PREOP，连续确认 5 次后才进行 PDO/DC 等配置（轮询间隔 10 ms，默认超时 5000 ms，可用 `--preop-timeout-ms` 配置）。激活成功仅表示配置已提交，不表示从站已经进入 OP。
 
-激活后的启动循环继续按配置周期收发 PDO 和 DC 同步报文，逐个使用 `ecrt_slave_config_state()` 查询从站。全部从站在线、处于 OP 且 `operational` 有效，链路正常、响应从站数量匹配、输入/输出域工作计数器均为 `EC_WC_COMPLETE`，连续确认 5 个周期后才读取客户端输出、发布过程数据并通知客户端。启动期间发送清零后的输出域；PREOP 和 OP 确认成功均打印日志。
+激活后的启动循环继续按配置周期收发 PDO 和 DC 同步报文，逐个使用 `ecrt_slave_config_state()` 查询从站。全部从站在线、处于 OP 且 `operational` 有效，链路正常、响应从站数量匹配、输入/输出域工作计数器均为 `EC_WC_COMPLETE`，连续确认 5 个周期后，开始异步 PDO 读回验证：
 
-PREOP 和 OP 均按单调时钟计时，查询及调度耗时计入超时。OP 从启动周期循环开始计时，默认 10000 ms，可用 `--op-timeout-ms` 配置；两个超时均为整个阶段的总时限，包含连续稳定确认时间，不是每个从站单独计时。值必须为正整数毫秒，0 不表示无限等待。状态查询失败或超时会停止启动并返回错误，不会继续处理客户端输出。链路掉线或工作计数器不完整会清除连续成功计数；周期超时跳过已错过的周期，不补跑，也不延长启动超时。运行期链路/WC/汇总 OP 状态异常会使共享总线的 `is_authorized` 为 false，现有周期通信仍继续，不自动执行状态重置。
+- 对每个从站读取 SM2/SM3 的 `0x1C12/0x1C13` 分配数量和各子索引，确认 PDO 数量、索引及顺序。
+- 对每个已配置 PDO 读取子索引 0 的条目数量，再逐项读取 32 位映射值，确认对象索引、子索引、位宽及顺序（包括填充条目）。
+- 预期值直接来自本次加载的配置；不把启动时打印的配置或 IgH 配置缓存当作设备读回。使用独立子索引读取，不依赖 Complete Access。
+- 所有从站全部验证通过后，再连续确认 5 个健康周期，才宣布就绪、读取客户端输出、发布过程数据并通知客户端。等待期间一直发送清零后的输出域。
+
+每个从站的 SDO 请求和验证表均在激活前创建；启动周期中一次只推进一个异步读取，不动态分配、不阻塞等待、不写 SDO 或重新配置从站。单次读取超时为 1000 ms；读取失败、长度不符、值不一致或超时均停止启动，不跳过不支持读回的设备，不自动重试。错误详情在周期任务退出后打印，包含从站物理位置、SM 方向、对象/子索引、期望值和实际值；映射条目不一致时还拆分显示 index/subindex/bits。读取失败没有有效实际值，报告失败原因。
+
+例如，位置 2 的从站第二个 TxPDO 条目位宽错误时：
+
+```text
+PDO verification failed at slave[position=2] SM3 TxPDO object=0x1a07:02 mapping entry/order expected=0x60640020 actual=0x60640010 expected{index=0x6064,subindex=0x0,bits=32} actual{index=0x6064,subindex=0x0,bits=16}
+```
+
+PREOP 和 OP 均按单调时钟计时，查询及调度耗时计入超时。OP 从启动周期循环开始计时，默认 10000 ms，可用 `--op-timeout-ms` 配置；两个超时均为整个阶段的总时限，包含连续稳定确认时间，不是每个从站单独计时。`--op-timeout-ms` 还包含所有从站的 PDO 读回验证时间；多轴或邮箱较慢的设备可适当增加此值。值必须为正整数毫秒，0 不表示无限等待。状态查询失败或超时会停止启动并返回错误，不会继续处理客户端输出。PDO 验证开始前，链路/OP/WC 不满足时继续等待；验证一旦开始，任何 OP、链路或 WKC 退化都会中止启动，避免沿用从站重新配置前的校验结果。周期超时跳过已错过的周期，不补跑，也不延长启动或单次读取超时。运行期链路/WC/汇总 OP 状态异常会使共享总线的 `is_authorized` 为 false，现有周期通信仍继续，不自动执行状态重置。
 
 例如，为多从站总线设置 PREOP 30 秒、OP 60 秒：
 
@@ -121,6 +134,6 @@ sudo bash scripts/disable-eoe.sh --master-id 0 && \
 ./build-master/rocos_igh_master --config config/talon_pdo.yaml --master-id 0 --dc on --preop-timeout-ms 30000 --op-timeout-ms 60000
 ```
 
-当前保持标准 IgH 接口：SAFEOP → OP 由 IgH 自动推进，**不提供“全部停留 SAFEOP、检查后再请求 OP”的屏障**。`initialize()` 完成配置与激活，OP 就绪确认在 `CyclicTask::run()` 的启动阶段完成。启动状态测试使用模拟查询，无需硬件；真实从站状态转换仍需单独进行硬件集成验证。
+当前保持标准 IgH 接口：SAFEOP → OP 由 IgH 自动推进，**不提供“全部停留 SAFEOP、检查后再请求 OP”的屏障**。`initialize()` 完成配置与激活，OP 和 PDO 读回就绪确认在 `CyclicTask::run()` 的启动阶段完成。`pdo_verification_test` 使用模拟 SDO、时钟和总线运行真实启动循环，覆盖多从站多 PDO、顺序/数量/映射差异、读取错误、超时、健康状态退化、业务隔离及周期内不分配内存，无需硬件；真实从站状态转换仍需单独进行硬件集成验证。
 
 DC 时间沿用 IgH `dc_user` 示例：初始化阶段不设置应用时间，从首个周期起使用目标 deadline 建立相位基准；发送前读取当前 `CLOCK_MONOTONIC` 时间，调用 `ecrt_master_sync_reference_clock_to()` 校准参考时钟。初始化不调用 `ecrt_master_reset()` 请求 INIT，也不在激活后空等状态切换。

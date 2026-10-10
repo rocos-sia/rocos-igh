@@ -298,6 +298,11 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
+    // SDO request objects and expected values must be allocated before activation.
+    if (!pdo_verification_.prepare(config, slave_configs_, error)) {
+        reset();
+        return false;
+    }
     if (!activateWithDcTime(dc_runtime.enabled, error)) {
         reset();
         return false;
@@ -648,6 +653,7 @@ void EthercatMaster::recordDcError(DcErrorStage stage, int error_code) noexcept 
 
 // Releases the master at most once and nulls every borrowed pointer and domain.
 void EthercatMaster::reset() noexcept {
+    pdo_verification_.reset();
     slave_configs_.clear();
     input_data_ = nullptr;
     output_data_ = nullptr;

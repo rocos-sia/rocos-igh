@@ -186,7 +186,7 @@ int main(int argc, char **argv) {
                 const bool stopped = reporter_stop.load();
                 if (cyclic_task.startupReady()) {
                     std::cout << "[master " << options.master_id
-                              << "] 全部从站就绪，可以开始工作（全部进入 OP，链路及输入/输出工作计数器连续 5 次检查正常）"
+                              << "] 全部从站就绪，可以开始工作（全部 RxPDO/TxPDO 分配及映射读回一致，OP、链路及输入/输出工作计数器连续 5 次检查正常）"
                               << std::endl;
                     return;
                 }
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
                 const auto now = std::chrono::steady_clock::now();
                 const auto mask = cyclic_task.startupOpMask();
                 if (now >= next_report) {
-                    std::cout << "[master " << options.master_id << "] 等待 OP，当前已进入 OP 的从站：";
+                    std::cout << "[master " << options.master_id << "] 等待 OP / PDO 读回验证，当前已进入 OP 的从站：";
                     std::size_t count = 0;
                     for (std::size_t i = 0; i < config.slave_count; ++i) {
                         if ((mask & (std::uint64_t{1} << i)) == 0) continue;
@@ -229,6 +229,7 @@ int main(int argc, char **argv) {
     printFinalStatistics(cyclic_task.statistics(), run_result);    // 循环结束后输出统计
 
     if (run_result != 0) { // 周期任务以错误码结束（如时钟调用失败）
+        master.pdoVerification().printError(std::cerr);
         std::cerr << "cyclic task failed: " << std::strerror(run_result) << '\n';
         const rocos::DcError dc_error = master.lastDcError();
         if (dc_error.stage != rocos::DcErrorStage::None) {

@@ -186,9 +186,12 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
     timespec last_wake = now;
 
     // Keep exchanging zero-initialized domain data until every configured
-    // slave is OP and both working counters are complete for five polls.
+    // slave is OP, its actual PDO assignment/mapping has been read back, and
+    // both working counters are complete for five subsequent polls.
     // No shared output is consumed and no client is notified during startup.
     StartupWait startup(toNanoseconds(now), op_timeout_ms_);
+    auto &verification = master_.pdoVerification();
+    unsigned int initial_healthy_cycles = 0;
     bool startup_ready = false;
     while (!startup_ready && !stop_requested) {
         int sleep_rc = 0;
@@ -228,6 +231,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         bool ready_states[MAX_SLAVE_NUM]{};
         bool all_operational = false;
         if (master_.pollSlaves(EC_AL_STATE_OP, all_operational, ready_states, MAX_SLAVE_NUM) != 0) {
+            if (verification.started()) verification.abort(PdoVerification::Failure::BusUnhealthy);
             return EIO;
         }
         std::uint64_t op_mask = 0;
@@ -239,8 +243,24 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
                              state.responding_slaves == master_.slaveCount() &&
                              state.input_wc_state == EC_WC_COMPLETE &&
                              state.output_wc_state == EC_WC_COMPLETE;
-        const auto result = startup.observe(toNanoseconds(wake_time), healthy);
+        if (!verification.started()) {
+            initial_healthy_cycles = healthy ? initial_healthy_cycles + 1U : 0U;
+        }
+        // Do not reuse checks across a possible slave reconfiguration. Fail
+        // closed if health is lost at any point after the first SDO was queued.
+        if (verification.started() && !healthy) {
+            verification.abort(PdoVerification::Failure::BusUnhealthy);
+            return EIO;
+        }
+        timespec check_time{};
+        if (clock_gettime(CLOCK_MONOTONIC, &check_time) != 0) return errno;
+        const auto result = startup.observe(toNanoseconds(check_time),
+                                            healthy && verification.complete());
         if (result == StartupWait::Result::TimedOut) {
+            if (verification.started()) {
+                verification.abort(PdoVerification::Failure::StartupTimeout);
+                return ETIMEDOUT;
+            }
             std::cerr << "[CyclicTask] Timed out waiting for all slaves in OP and complete WCs"
                       << " (timeout_ms=" << op_timeout_ms_ << "): all_op=" << all_operational << " link=" << state.link_up
                       << " responding=" << state.responding_slaves
@@ -249,6 +269,13 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             return ETIMEDOUT;
         }
         startup_ready = result == StartupWait::Result::Ready;
+
+        if (healthy && initial_healthy_cycles >= 5U && !verification.complete()) {
+            if (verification.step(toNanoseconds(check_time)) == PdoVerification::Result::Failed) {
+                return verification.error().failure == PdoVerification::Failure::RequestTimeout
+                           ? ETIMEDOUT : EIO;
+            }
+        }
 
         if (!master_.queueAndSend()) {
             std::cerr << "[CyclicTask] Startup queueAndSend failed\n";

@@ -9,6 +9,7 @@
 #include <ecrt.h>
 
 #include "slave_config.hpp"
+#include "pdo_verification.hpp"
 
 namespace rocos {
 
@@ -66,7 +67,8 @@ public:
      * Creates one input and one output domain, configures each slave and
      * registers its PDO entries, then activates the master and caches both
      * domain buffers. Activation is not OP readiness: CyclicTask polls every
-     * slave and the domain working counters before releasing client data.
+     * slave and the domain working counters, then asynchronously verifies each
+     * slave's PDO assignment/mapping before releasing client data.
      * On any failure the object is reset and @p error is set.
      *
      * @param master_id IgH master index to request.
@@ -95,6 +97,8 @@ public:
     int pollSlaves(ec_al_state_t target, bool &all_ready, bool *ready_states,
                    std::size_t capacity) noexcept;
     std::size_t slaveCount() const noexcept { return slave_configs_.size(); }
+    PdoVerification &pdoVerification() noexcept { return pdo_verification_; }
+    const PdoVerification &pdoVerification() const noexcept { return pdo_verification_; }
 
     /// @brief Returns the input-domain process-data base pointer.
     std::uint8_t *inputData() noexcept;
@@ -129,6 +133,7 @@ private:
     void reset() noexcept;
 
     std::vector<ec_slave_config_t *> slave_configs_;
+    PdoVerification pdo_verification_;
     ec_master_t *master_{nullptr};
     ec_domain_t *input_domain_{nullptr};
     ec_domain_t *output_domain_{nullptr};

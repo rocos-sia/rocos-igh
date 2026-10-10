@@ -12,6 +12,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
 		src/pdo_config.cpp
+		src/pdo_verification.cpp
 		src/slave_config.cpp
 		src/ethercat_master.cpp
 		src/cyclic_task.cpp
@@ -50,6 +51,17 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
 	if(ROCOS_IGH_BUILD_MASTER)
+		add_executable(pdo_verification_test tests/pdo_verification_test.cpp)
+		target_link_libraries(pdo_verification_test PRIVATE rocos_igh_core)
+		foreach(symbol ecrt_slave_config_create_sdo_request ecrt_sdo_request_timeout
+			ecrt_sdo_request_index ecrt_sdo_request_read ecrt_sdo_request_state
+			ecrt_sdo_request_data_size ecrt_sdo_request_data clock_gettime clock_nanosleep
+			ecrt_master_receive ecrt_domain_process ecrt_master_state ecrt_domain_state
+			ecrt_slave_config_state ecrt_domain_queue ecrt_master_send ecrt_release_master)
+			target_link_options(pdo_verification_test PRIVATE "-Wl,--wrap=${symbol}")
+		endforeach()
+		add_test(NAME pdo_verification COMMAND pdo_verification_test)
+		set_tests_properties(pdo_verification PROPERTIES TIMEOUT 15)
 		add_executable(startup_state_test tests/startup_state_test.cpp)
 		target_link_libraries(startup_state_test PRIVATE rocos_igh_core)
 		target_link_options(startup_state_test PRIVATE "-Wl,--wrap=ecrt_slave_config_state")
