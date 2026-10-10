@@ -3,37 +3,43 @@
 #include <cerrno>
 #include <cstring>
 #include <sched.h>
+#include <system_error>
+#include <thread>
 
 namespace rocos {
 
 bool validateThreadCpu(unsigned int cpu, std::string &error) {
+    // Probe on a disposable thread before accessing EtherCAT. Inherited affinity
+    // is not a cpuset boundary: an explicitly requested isolated CPU may lie
+    // outside it. Keep the caller's mask intact for future reporter threads.
+    if (cpu >= CPU_SETSIZE) {
+        error = "--cpu must be below CPU_SETSIZE (" + std::to_string(CPU_SETSIZE) + ")";
+        return false;
+    }
+    bool valid = false;
+    try {
+        std::thread probe([&] { valid = bindCurrentThreadCpu(cpu, error); });
+        probe.join();
+    } catch (const std::system_error &exception) {
+        error = "CPU affinity probe failed: " + std::string(exception.what());
+        return false;
+    }
+    return valid;
+}
+
+bool bindCurrentThreadCpu(unsigned int cpu, std::string &error) {
     error.clear();
     if (cpu >= CPU_SETSIZE) {
         error = "--cpu must be below CPU_SETSIZE (" + std::to_string(CPU_SETSIZE) + ")";
         return false;
     }
-    cpu_set_t allowed;
-    CPU_ZERO(&allowed);
-    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
-        error = "sched_getaffinity failed: " + std::string(std::strerror(errno));
-        return false;
-    }
-    if (!CPU_ISSET(cpu, &allowed)) {
-        error = "--cpu " + std::to_string(cpu) +
-                " is not in the current allowed CPU mask; check online CPUs, taskset and cpuset";
-        return false;
-    }
-    return true;
-}
-
-bool bindCurrentThreadCpu(unsigned int cpu, std::string &error) {
-    if (!validateThreadCpu(cpu, error)) return false;
     cpu_set_t requested;
     CPU_ZERO(&requested);
     CPU_SET(cpu, &requested);
     if (sched_setaffinity(0, sizeof(requested), &requested) != 0) {
         error = "sched_setaffinity CPU " + std::to_string(cpu) +
-                " failed: " + std::string(std::strerror(errno));
+                " failed: " + std::string(std::strerror(errno)) +
+                "; check online CPUs, cpuset restrictions and affinity permissions";
         return false;
     }
     cpu_set_t effective;

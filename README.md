@@ -54,8 +54,10 @@ sudo ./build/rocos_igh_master --config ./config/talon_pdo.yaml \
     --dc on --op-timeout-ms 60000 --cpu 3
 ```
 
-`--cpu` 在访问 EtherCAT 设备前检查编号是否位于当前线程允许的 CPU 集合内；
-不接受离线或被 taskset/cpuset 排除的 CPU，以及超出 `CPU_SETSIZE` 的编号。
+`--cpu` 在访问 EtherCAT 设备前通过临时线程试绑并读回验证，不改变主线程的原有亲和性。
+显式指定的 CPU 可以位于继承的亲和性集合之外，包括 `isolcpus` 隔离核；
+无需先用 `taskset` 扩展集合。内核仍会拒绝离线、cpuset 禁止或权限不足的绑定，
+程序也会拒绝超出 `CPU_SETSIZE` 的编号。
 日志线程创建后、进入周期循环前，通过 `sched_setaffinity(0, ...)` 绑定实际
 运行周期循环的主线程，并读回亲和性确认。失败直接退出，不默默退回未绑定运行。
 日志线程保留原有亲和性和调度策略；不修改 IRQ 或 IgH 内核线程的亲和性。

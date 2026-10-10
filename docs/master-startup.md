@@ -39,7 +39,8 @@ lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
 执行 `sudo systemctl start ethercat`，再重新检查。不要在运行中的总线上
 通过重启服务、重扫或强制切换从站状态来代替排查。
 
-CPU 3 必须在线，并处于启动进程允许的 CPU 集合内。本机 CPU 1、3 是同一
+CPU 3 必须在线，且允许通过内核亲和性接口绑定（受 cpuset 和权限限制），
+无需预先包含在启动进程继承的亲和性集合中。本机 CPU 1、3 是同一
 物理核的超线程兄弟；若已按 [实时 CPU 隔离与 GRUB 配置](realtime-cpu-isolation.md)
 隔离 `1,3`，仍需要在主站命令中使用 `--cpu 3`。
 绑定参数不会自动配置 GRUB、中断亲和性或 CPU 隔离。
@@ -173,7 +174,8 @@ ps -T -p 1234 -o pid,tid,psr,cls,rtprio,comm
 | 现象 | 排查方向 |
 |---|---|
 | `unknown option: --cpu` | 正在运行旧二进制；重新编译并确认使用的构建目录 |
-| CPU 不在 `allowed CPU mask` 内 | 查询在线 CPU，以及 taskset、cpuset 或服务配置的允许集合 |
+| CPU 不在 `allowed CPU mask` 内 | 旧版本限制；重新编译后可直接绑定继承集合之外的隔离核，无需先用 taskset 扩展集合 |
+| `sched_setaffinity CPU ... failed` | 查询在线 CPU、cpuset 或服务的 AllowedCPUs 限制，以及亲和性设置权限 |
 | `mlockall failed` / `sched_setscheduler failed` | 检查启动权限、锁内存限制和实时调度权限 |
 | 请求主站失败 | 检查 IgH 服务、主站 ID、设备权限及是否已有应用占用 |
 | SDO `rc=-5`，内核同时出现 EoE/CoE 邮箱错误 | 检查 EoE 是否重新启用；结合内核日志判断，不能仅凭 `-5` 认定原因 |

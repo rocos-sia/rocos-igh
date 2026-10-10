@@ -29,17 +29,47 @@ bool testAffinity() {
     bool worker_ok = false;
     std::thread worker([&] {
         worker_ok = [&]() -> bool {
+            // Discover kernel-permitted CPUs independently of inherited affinity.
+            // Only this disposable test thread changes its mask.
+            cpu_set_t available;
+            CPU_ZERO(&available);
+            for (unsigned int cpu = 0; cpu < CPU_SETSIZE; ++cpu) CPU_SET(cpu, &available);
+            CHECK(sched_setaffinity(0, sizeof(available), &available) == 0);
+            CHECK(sched_getaffinity(0, sizeof(available), &available) == 0);
             CHECK(rocos::bindCurrentThreadCpu(selected, error));
             cpu_set_t actual;
             CPU_ZERO(&actual);
             CHECK(sched_getaffinity(0, sizeof(actual), &actual) == 0);
             CHECK(CPU_COUNT(&actual) == 1 && CPU_ISSET(selected, &actual));
             CHECK(sched_getcpu() == static_cast<int>(selected));
-            const unsigned int excluded = (selected + 1) % CPU_SETSIZE;
-            CHECK(!rocos::bindCurrentThreadCpu(excluded, error));
-            CHECK(error.find("allowed CPU mask") != std::string::npos);
-            CHECK(sched_getaffinity(0, sizeof(actual), &actual) == 0);
-            CHECK(CPU_COUNT(&actual) == 1 && CPU_ISSET(selected, &actual));
+            // The probe inherits a singleton mask but must be able to bind another
+            // permitted CPU, leaving its caller unchanged (as with the reporter).
+            unsigned int alternative = CPU_SETSIZE;
+            unsigned int unavailable = CPU_SETSIZE;
+            for (unsigned int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+                if (CPU_ISSET(cpu, &available) && cpu != selected) alternative = cpu;
+                if (!CPU_ISSET(cpu, &available)) unavailable = cpu;
+            }
+            if (unavailable < CPU_SETSIZE) {
+                CHECK(!rocos::validateThreadCpu(unavailable, error));
+                CHECK(error.find("sched_setaffinity CPU") != std::string::npos);
+                CHECK(error.find("cpuset") != std::string::npos);
+                CHECK(!rocos::bindCurrentThreadCpu(unavailable, error));
+                CHECK(sched_getaffinity(0, sizeof(actual), &actual) == 0);
+                CHECK(CPU_COUNT(&actual) == 1 && CPU_ISSET(selected, &actual));
+            }
+            if (alternative < CPU_SETSIZE) {
+                CHECK(rocos::validateThreadCpu(alternative, error));
+                CHECK(error.empty());
+                CHECK(sched_getaffinity(0, sizeof(actual), &actual) == 0);
+                CHECK(CPU_COUNT(&actual) == 1 && CPU_ISSET(selected, &actual));
+                CHECK(rocos::bindCurrentThreadCpu(alternative, error));
+                CHECK(sched_getaffinity(0, sizeof(actual), &actual) == 0);
+                CHECK(CPU_COUNT(&actual) == 1 && CPU_ISSET(alternative, &actual));
+                CHECK(sched_getcpu() == static_cast<int>(alternative));
+            } else {
+                std::cout << "SKIP affinity expansion: only one CPU permitted by kernel\n";
+            }
             CHECK(rocos::bindCurrentThreadCpu(selected, error));
             CHECK(error.empty());
             return true;

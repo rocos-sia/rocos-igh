@@ -171,7 +171,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nCPU: non-negative logical CPU allowed by the inherited affinity; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers.";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nCPU: non-negative logical CPU permitted by the kernel; explicit binding may expand inherited affinity (including isolated CPUs), subject to cpuset restrictions; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers.";
 }
 
 }  // namespace rocos
