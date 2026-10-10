@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace rocos {
@@ -11,6 +12,7 @@ namespace rocos {
 struct RuntimeOptions {
     unsigned int master_id{0};     ///< Non-negative EtherCAT master index.
     std::uint32_t period_us{1000}; ///< Cycle period in microseconds (>= 1000).
+    std::optional<unsigned int> cpu; ///< Logical CPU for cyclic thread; unset preserves affinity.
     std::string config_path;       ///< Required PDO YAML configuration path.
     std::uint32_t preop_timeout_ms{10000}; ///< PREOP startup timeout [ms], positive.
     std::uint32_t op_timeout_ms{60000}; ///< OP startup timeout [ms], positive.
@@ -22,7 +24,7 @@ struct RuntimeOptions {
  * @brief Parses argv strictly into @p options.
  *
  * Accepts --config, --master-id, --period-us, --dc, --preop-timeout-ms,
- * --op-timeout-ms, and --help. Rejects unknown
+ * --op-timeout-ms, --cpu, and --help. Rejects unknown
  * flags, missing values, duplicates, signs, trailing characters, and overflow.
  *
  * @param argc    Argument count.

@@ -17,6 +17,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 		src/ethercat_master.cpp
 		src/cyclic_task.cpp
 		src/runtime_options.cpp
+		src/thread_affinity.cpp
 	)
 	target_include_directories(rocos_igh_core PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
@@ -50,6 +51,16 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(runtime_options_test tests/runtime_options_test.cpp src/runtime_options.cpp)
+	target_include_directories(runtime_options_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_compile_features(runtime_options_test PRIVATE cxx_std_17)
+	add_test(NAME runtime_options COMMAND runtime_options_test)
+	add_executable(thread_affinity_test tests/thread_affinity_test.cpp src/thread_affinity.cpp)
+	target_include_directories(thread_affinity_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_compile_features(thread_affinity_test PRIVATE cxx_std_17)
+	target_link_libraries(thread_affinity_test PRIVATE Threads::Threads)
+	add_test(NAME thread_affinity COMMAND thread_affinity_test)
+	set_tests_properties(thread_affinity PROPERTIES TIMEOUT 10)
 	if(ROCOS_IGH_BUILD_MASTER)
 		add_executable(pdo_verification_test tests/pdo_verification_test.cpp)
 		target_link_libraries(pdo_verification_test PRIVATE rocos_igh_core)

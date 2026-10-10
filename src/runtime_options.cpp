@@ -48,7 +48,8 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             continue;
         }
         if (flag != "--config" && flag != "--master-id" && flag != "--period-us" &&
-            flag != "--dc" && flag != "--preop-timeout-ms" && flag != "--op-timeout-ms") {
+            flag != "--dc" && flag != "--preop-timeout-ms" && flag != "--op-timeout-ms" &&
+            flag != "--cpu") {
             error = "unknown option: " + std::string(flag);
             return false;
         }
@@ -94,6 +95,19 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         if (!parseUnsigned(value_text, parsed_value)) {
             error = "invalid value for option: " + std::string(flag);
             return false;
+        }
+
+        if (flag == "--cpu") {
+            if (options.cpu.has_value()) {
+                error = "duplicate option: --cpu";
+                return false;
+            }
+            if (parsed_value > std::numeric_limits<unsigned int>::max()) {
+                error = "cpu is out of range";
+                return false;
+            }
+            options.cpu = static_cast<unsigned int>(parsed_value);
+            continue;
         }
 
         if (flag == "--preop-timeout-ms" || flag == "--op-timeout-ms") {
@@ -157,7 +171,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nPREOP timeout default: 5000 ms; OP timeout default: 60000 ms; both must be positive integers.";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nCPU: non-negative logical CPU allowed by the inherited affinity; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers.";
 }
 
 }  // namespace rocos

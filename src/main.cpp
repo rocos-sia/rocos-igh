@@ -13,6 +13,7 @@
 #include "runtime_options.hpp"      // 命令行参数解析（RuntimeOptions）
 #include "shared_memory_config.hpp" // 共享内存 IPC 与跨进程 ABI（SharedMemoryConfig）
 #include "slave_config.hpp"         // 动态 IgH 配置所有权（LoadedSlaveConfig）
+#include "thread_affinity.hpp"
 
 // 标准库与系统头文件。
 #include <atomic>
@@ -23,6 +24,7 @@
 #include <cerrno>      // errno（错误码）
 #include <csignal>     // sig_atomic_t / sigaction / SIGINT / SIGTERM
 #include <cstring>     // std::strerror
+#include <ctime>       // clock_getres / CLOCK_MONOTONIC
 #include <iostream>    // std::cout / std::cerr
 #include <sched.h>     // sched_param / SCHED_FIFO / sched_setscheduler
 #include <string>      // std::string
@@ -69,9 +71,16 @@ bool installSignalHandlers(std::string &error) {
     return true; // 两个信号处理器都安装成功
 }
 
-// 进入周期循环前完成实时准备：锁定内存、预触碰栈、切换到 SCHED_FIFO 调度。
-bool configureRealtime(std::string &error) {
+// 进入周期循环前完成实时准备：CPU 绑定、锁定内存、预触碰栈、SCHED_FIFO。
+bool configureRealtime(const rocos::RuntimeOptions &options, std::string &error) {
     error.clear();
+
+    // Reporter already exists: only the calling (cyclic) thread is pinned.
+    if (options.cpu && !rocos::bindCurrentThreadCpu(*options.cpu, error)) return false;
+    if (options.cpu) {
+        std::cout << "[Realtime] cyclic thread CPU=" << *options.cpu
+                  << " (affinity verified)\n";
+    }
 
     // mlockall 锁定当前及未来所有内存页，避免周期线程运行中发生缺页导致的延迟。
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
@@ -86,7 +95,7 @@ bool configureRealtime(std::string &error) {
         stack_data[i] = 0; // 触碰每一页，确保已映射到物理内存
     }
 
-    // 设置 SCHED_FIFO 实时调度策略与静态优先级，使本进程以实时优先级运行。
+    // 设置当前周期线程的 SCHED_FIFO 策略与静态优先级。
     sched_param scheduler{};
     scheduler.sched_priority = kRealtimePriority; // 静态优先级 80
     if (sched_setscheduler(0, SCHED_FIFO, &scheduler) != 0) { // 参数 0 表示当前线程
@@ -121,6 +130,22 @@ int main(int argc, char **argv) {
     if (options.show_help) { // 用户请求了 --help
         std::cout << rocos::runtimeOptionsUsage() << '\n'; // 只打印用法
         return EXIT_SUCCESS; // 正常退出
+    }
+
+    // Validate before reserving the master or changing any slave configuration.
+    if (options.cpu && !rocos::validateThreadCpu(*options.cpu, error)) {
+        std::cerr << error << '\n';
+        return EXIT_FAILURE;
+    }
+    timespec resolution{};
+    if (clock_getres(CLOCK_MONOTONIC, &resolution) != 0) {
+        std::cerr << "clock_getres(CLOCK_MONOTONIC) failed: " << std::strerror(errno) << '\n';
+        return EXIT_FAILURE;
+    }
+    if (resolution.tv_sec != 0 || resolution.tv_nsec != 1) {
+        std::cerr << "[Realtime] WARNING: CLOCK_MONOTONIC resolution="
+                  << resolution.tv_sec << " s + " << resolution.tv_nsec
+                  << " ns; expected 1 ns high-resolution clock\n";
     }
 
     // —— 第二步：加载 YAML PDO 配置并构建 IgH 配置视图 ——
@@ -215,7 +240,7 @@ int main(int argc, char **argv) {
     }
 
     // —— 第七步：配置实时环境（锁内存、预触碰、SCHED_FIFO）——
-    if (!configureRealtime(error)) {
+    if (!configureRealtime(options, error)) {
         reporter_stop.store(true);
         reporter.join();
         std::cerr << error << '\n';

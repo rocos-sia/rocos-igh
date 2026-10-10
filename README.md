@@ -39,10 +39,40 @@ The executable is `rocos_igh_master` and supports:
 - `--config <PDO YAML path>` (required)
 - `--master-id <non-negative integer>`
 - `--period-us <integer >= 1000>`
-- `--preop-timeout-ms <1..4294967295>`：PREOP 等待超时，默认 5000 ms
+- `--cpu <non-negative logical CPU ID>`（可选，仅绑定周期线程；默认沿用启动时的亲和性）
+- `--preop-timeout-ms <1..4294967295>`：PREOP 等待超时，默认 10000 ms
 - `--op-timeout-ms <1..4294967295>`：OP 等待超时，默认 60000 ms
 - `--dc <on|off>` (default: `off`)
 - `--help`
+
+### 周期线程 CPU 亲和性
+
+例如将主站的周期线程绑定到逻辑 CPU 3（编号从 0 开始）：
+
+```bash
+sudo ./build/rocos_igh_master --config ./config/talon_pdo.yaml \
+    --dc on --op-timeout-ms 60000 --cpu 3
+```
+
+`--cpu` 在访问 EtherCAT 设备前检查编号是否位于当前线程允许的 CPU 集合内；
+不接受离线或被 taskset/cpuset 排除的 CPU，以及超出 `CPU_SETSIZE` 的编号。
+日志线程创建后、进入周期循环前，通过 `sched_setaffinity(0, ...)` 绑定实际
+运行周期循环的主线程，并读回亲和性确认。失败直接退出，不默默退回未绑定运行。
+日志线程保留原有亲和性和调度策略；不修改 IRQ 或 IgH 内核线程的亲和性。
+
+实时准备继续使用 `mlockall(MCL_CURRENT | MCL_FUTURE)`、64 KiB 栈预触碰和
+`SCHED_FIFO` 优先级 80，锁内存或调度设置失败则退出。启动时增加
+`CLOCK_MONOTONIC` 分辨率检查：查询失败退出，非 1 ns 时给出警告。
+分辨率不等于实际唤醒延迟，绑定 CPU 也不等于独占或隔离 CPU。
+
+周期仍使用 `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...)`；
+亲和性和实时设置仅在初始化执行，不给 1 ms 周期增加系统配置调用、分配或日志。
+超时仍跳过错过的周期并累计 `missed_deadlines`，不补跑；启动期总线异常处理、
+运行期掉线/WKC 异常时清除 `is_authorized` 并继续周期通信的行为保持不变。
+
+可用 `lscpu -e=CPU,CORE,SOCKET,ONLINE` 查看逻辑核与物理核对应关系，
+运行后用 `taskset -pc <主站PID>` 检查主线程绑定结果。退出统计中的
+`min_us/max_us/avg_us` 表示相邻周期唤醒间隔，结合 `missed_deadlines` 比较绑定前后抖动。
 
 ### 每次启动前关闭 EoE
 
