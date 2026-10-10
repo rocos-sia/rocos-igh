@@ -18,7 +18,8 @@ public:
     enum class Result { Pending, Complete, Failed };
     enum class Failure {
         None, NotPrepared, SetIndex, StartRead, Read, Size, Value,
-        RequestTimeout, StartupTimeout, BusUnhealthy
+        RequestTimeout, StartupTimeout, BusUnhealthy, Write, PreopState,
+        PreopTimeout, Clock
     };
     enum class Field { AssignmentCount, Assignment, MappingCount, MappingEntry };
     struct Check {
@@ -37,21 +38,28 @@ public:
         std::uint32_t actual{0};
         std::size_t actual_size{0};
         int api_error{0};
+        std::uint32_t abort_code{0};
     };
 
     static constexpr std::uint32_t kRequestTimeoutMs = 1000;
     bool prepare(const StaticSlaveConfig &config,
                  const std::vector<ec_slave_config_t *> &slaves, std::string &error);
+    // Blocking SDOs: initialization only, before ecrt_master_activate().
+    // timeout_ms is shared by all slaves/attempts; an in-flight IgH ioctl cannot
+    // be cancelled by this budget. Its result is checked again after return.
+    bool configurePreop(ec_master_t *master, std::uint32_t timeout_ms,
+                        std::ostream &log, std::string &error);
     Result step(std::int64_t monotonic_ns) noexcept;
     void abort(Failure failure) noexcept;
     void reset() noexcept;
     bool started() const noexcept { return started_; }
     bool complete() const noexcept { return result_ == Result::Complete; }
     const Error &error() const noexcept { return error_; }
-    // Call only after the cyclic task has returned, outside the realtime path.
+    // Call only outside the realtime path (initialization or after cyclic exit).
     void printError(std::ostream &out) const;
 
 private:
+    bool compare(const std::uint8_t *data, std::size_t size) noexcept;
     void fail(Failure failure, int api_error = 0,
               std::uint32_t actual = 0, std::size_t actual_size = 0) noexcept;
     std::vector<Check> checks_;

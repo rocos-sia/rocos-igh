@@ -57,7 +57,8 @@ if(BUILD_TESTING)
 			ecrt_sdo_request_index ecrt_sdo_request_read ecrt_sdo_request_state
 			ecrt_sdo_request_data_size ecrt_sdo_request_data clock_gettime clock_nanosleep
 			ecrt_master_receive ecrt_domain_process ecrt_master_state ecrt_domain_state
-			ecrt_slave_config_state ecrt_domain_queue ecrt_master_send ecrt_release_master)
+			ecrt_slave_config_state ecrt_domain_queue ecrt_master_send ecrt_release_master
+			ecrt_master_get_slave ecrt_master_sdo_download ecrt_master_sdo_upload)
 			target_link_options(pdo_verification_test PRIVATE "-Wl,--wrap=${symbol}")
 		endforeach()
 		add_test(NAME pdo_verification COMMAND pdo_verification_test)

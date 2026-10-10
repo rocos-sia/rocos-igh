@@ -115,6 +115,8 @@ bool EthercatMaster::initialize(unsigned int master_id,
             }
         }
     }
+    const auto preop_deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(preop_timeout_ms);
     if (!waitForSlavesInPreop(config, error, preop_timeout_ms)) {
         reset();
         return false;
@@ -300,6 +302,18 @@ bool EthercatMaster::initialize(unsigned int master_id,
 
     // SDO request objects and expected values must be allocated before activation.
     if (!pdo_verification_.prepare(config, slave_configs_, error)) {
+        reset();
+        return false;
+    }
+    const auto remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        preop_deadline - std::chrono::steady_clock::now()).count();
+    if (remaining_ms <= 0) {
+        error = "PREOP timeout before PDO configuration readback";
+        reset();
+        return false;
+    }
+    if (!pdo_verification_.configurePreop(master_, static_cast<std::uint32_t>(remaining_ms),
+                                         std::cerr, error)) {
         reset();
         return false;
     }

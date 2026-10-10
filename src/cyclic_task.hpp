@@ -93,7 +93,7 @@ public:
      * @param period_us Cycle period in microseconds (must be >= 1000).
      * @param op_timeout_ms Total OP + PDO readback timeout in milliseconds (positive).
      */
-    CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us, std::uint32_t op_timeout_ms = 10000U) noexcept;
+    CyclicTask(EthercatMaster &master, SharedMemoryConfig &ipc, std::uint32_t period_us, std::uint32_t op_timeout_ms = 60000U) noexcept;
 
     /**
      * @brief Runs the cyclic loop until @p stop_requested is set.

@@ -157,7 +157,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nPREOP timeout default: 5000 ms; OP timeout default: 10000 ms; both must be positive integers.";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nPREOP timeout default: 5000 ms; OP timeout default: 60000 ms; both must be positive integers.";
 }
 
 }  // namespace rocos

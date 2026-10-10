@@ -54,10 +54,10 @@ int main() {
     }
     CHECK(gate.observe(500000000LL, true) == Result::Ready);
     rocos::StartupWait timeout(100);
-    CHECK(timeout.observe(10000000099LL, false) == Result::Waiting);
-    CHECK(timeout.observe(10000000100LL, true) == Result::TimedOut);
+    CHECK(timeout.observe(60000000099LL, false) == Result::Waiting);
+    CHECK(timeout.observe(60000000100LL, true) == Result::TimedOut);
     rocos::StartupWait late_wake(0);
-    CHECK(late_wake.observe(20000000000LL, false) == Result::TimedOut);
+    CHECK(late_wake.observe(70000000000LL, false) == Result::TimedOut);
 
     rocos::StartupWait custom_timeout(100, 30000U);
     CHECK(custom_timeout.observe(10000000100LL, false) == Result::Waiting);

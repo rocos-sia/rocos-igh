@@ -1,7 +1,10 @@
 #include "pdo_verification.hpp"
 
+#include <cerrno>
+#include <ctime>
 #include <iomanip>
 #include <ostream>
+#include <sstream>
 
 namespace rocos {
 
@@ -141,26 +144,141 @@ PdoVerification::Result PdoVerification::step(std::int64_t now_ns) noexcept {
         return result_;
     }
     const auto size = ecrt_sdo_request_data_size(request);
-    if (size != check.size) {
-        fail(Failure::Size, 0, 0, size);
+    // Do not access the request buffer if IgH reports an unexpected size.
+    if (!compare(size == check.size ? ecrt_sdo_request_data(request) : nullptr, size))
         return result_;
-    }
-    const auto *data = ecrt_sdo_request_data(request);
-    if (data == nullptr) {
-        fail(Failure::Read);
-        return result_;
-    }
-    std::uint32_t value = 0;
-    for (std::size_t i = 0; i < size; ++i) {
-        value |= std::uint32_t{data[i]} << (8 * i);
-    }
-    if (value != check.expected) {
-        fail(Failure::Value, 0, value, size);
-        return result_;
-    }
     busy_ = false;
     if (++cursor_ == checks_.size()) result_ = Result::Complete;
     return result_;
+}
+
+bool PdoVerification::compare(const std::uint8_t *data, std::size_t size) noexcept {
+    const auto &check = checks_[cursor_];
+    if (size != check.size) {
+        fail(Failure::Size, 0, 0, size);
+        return false;
+    }
+    if (data == nullptr) {
+        fail(Failure::Read);
+        return false;
+    }
+    std::uint32_t value = 0;
+    for (std::size_t i = 0; i < size; ++i)
+        value |= std::uint32_t{data[i]} << (8 * i);
+    if (value != check.expected) {
+        fail(Failure::Value, 0, value, size);
+        return false;
+    }
+    return true;
+}
+
+bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_ms,
+                                      std::ostream &log, std::string &error) {
+    error.clear();
+    const auto report = [&] {
+        std::ostringstream message;
+        printError(message);
+        error = message.str();
+        return false;
+    };
+    if (!prepared_ || master == nullptr || started_) {
+        fail(Failure::NotPrepared);
+        return report();
+    }
+    const auto now = [&]() -> std::int64_t {
+        timespec ts{};
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+            fail(Failure::Clock, -errno);
+            return 0;
+        }
+        return std::int64_t{ts.tv_sec} * 1000000000 + ts.tv_nsec;
+    };
+    const auto deadline = now() + std::int64_t{timeout_ms} * 1000000;
+    if (result_ == Result::Failed) return report();
+    const auto guard = [&] {
+        ec_slave_info_t info{};
+        const auto &c = checks_[cursor_];
+        const int rc = ecrt_master_get_slave(master, c.slave_position, &info);
+        if (rc != 0 || info.al_state != EC_AL_STATE_PREOP || info.error_flag != 0) {
+            fail(Failure::PreopState, rc, info.al_state, info.error_flag);
+            return false;
+        }
+        if (now() >= deadline) fail(Failure::PreopTimeout);
+        return result_ != Result::Failed;
+    };
+    // Both assignments must be disabled before touching a PDO mapping. Restore
+    // mapping counts before enabling assignments. Retry the whole slave so a
+    // partial write can never be accepted as a complete configuration.
+    const Field phases[]{Field::AssignmentCount, Field::MappingCount,
+                         Field::MappingEntry, Field::MappingCount,
+                         Field::Assignment, Field::AssignmentCount};
+    for (std::size_t begin = 0; begin < checks_.size();) {
+        std::size_t end = begin + 1;
+        while (end < checks_.size() &&
+               checks_[end].slave_index == checks_[begin].slave_index) ++end;
+        bool verified = false;
+        for (unsigned int attempt = 1; attempt <= 3; ++attempt) {
+            result_ = Result::Pending;
+            error_ = {};
+            for (unsigned int phase = 0; phase < 6 && result_ == Result::Pending; ++phase) {
+                for (cursor_ = begin; cursor_ < end; ++cursor_) {
+                    const auto &c = checks_[cursor_];
+                    if (c.field != phases[phase]) continue;
+                    if (!guard()) break;
+                    const auto value = phase < 2 ? 0U : c.expected;
+                    std::uint8_t data[4]{};
+                    for (std::size_t i = 0; i < c.size; ++i)
+                        data[i] = static_cast<std::uint8_t>(value >> (8 * i));
+                    std::uint32_t abort_code = 0;
+                    const int rc = ecrt_master_sdo_download(master, c.slave_position,
+                        c.index, c.subindex, data, c.size, &abort_code);
+                    if (!guard()) break; // Reject late results and state changes.
+                    if (rc != 0) {
+                        fail(Failure::Write, rc, value, c.size);
+                        error_.abort_code = abort_code;
+                        break;
+                    }
+                }
+            }
+            if (result_ == Result::Pending) {
+                for (cursor_ = begin; cursor_ < end; ++cursor_) {
+                    const auto &c = checks_[cursor_];
+                    if (!guard()) break;
+                    std::uint8_t data[4]{};
+                    std::size_t size = 0;
+                    std::uint32_t abort_code = 0;
+                    const int rc = ecrt_master_sdo_upload(master, c.slave_position,
+                        c.index, c.subindex, data, sizeof(data), &size, &abort_code);
+                    if (!guard()) break;
+                    if (rc != 0) {
+                        fail(Failure::Read, rc);
+                        error_.abort_code = abort_code;
+                        break;
+                    }
+                    if (!compare(data, size)) break;
+                }
+            }
+            if (result_ == Result::Pending) {
+                log << "PREOP PDO configuration verified: slave[position="
+                    << checks_[begin].slave_position << "] attempt=" << attempt << "/3\n";
+                verified = true;
+                break;
+            }
+            log << "PREOP PDO attempt=" << attempt << "/3 ";
+            printError(log);
+            if (error_.failure == Failure::PreopState ||
+                error_.failure == Failure::PreopTimeout || error_.failure == Failure::Clock)
+                return report(); // Never retry writes outside healthy PREOP.
+        }
+        if (!verified) return report();
+        begin = end;
+    }
+    // PREOP success does not grant readiness: IgH may rewrite PDOs on activation.
+    // Keep all asynchronous requests unused and verify again in the startup loop.
+    cursor_ = 0;
+    result_ = Result::Pending;
+    error_ = {};
+    return true;
 }
 
 void PdoVerification::reset() noexcept {
@@ -214,9 +332,17 @@ void PdoVerification::printError(std::ostream &out) const {
     case Failure::StartupTimeout: out << " total startup timeout during verification"; break;
     case Failure::BusUnhealthy: out << " verification invalidated by OP/link/WC loss"; break;
     case Failure::NotPrepared: out << " verification requests were not prepared"; break;
+    case Failure::Write:
+        out << " SDO write failed attempted=0x" << std::hex << error_.actual << std::dec; break;
+    case Failure::PreopState:
+        out << " PREOP state check failed: al_state=0x" << std::hex << error_.actual
+            << std::dec << " error_flag=" << error_.actual_size; break;
+    case Failure::PreopTimeout: out << " total PREOP configuration timeout"; break;
+    case Failure::Clock: out << " monotonic clock query failed"; break;
     case Failure::None: break;
     }
     if (error_.api_error != 0) out << " rc=" << error_.api_error;
+    if (error_.abort_code != 0) out << " SDO abort=0x" << std::hex << error_.abort_code << std::dec;
     out << '\n';
     out.flags(flags);
     out.fill(fill);

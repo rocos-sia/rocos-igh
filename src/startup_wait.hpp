@@ -10,7 +10,7 @@ namespace rocos {
 class StartupWait {
 public:
     enum class Result { Waiting, Ready, TimedOut };
-    explicit StartupWait(std::int64_t start_ns, std::uint32_t timeout_ms = 10000U) noexcept
+    explicit StartupWait(std::int64_t start_ns, std::uint32_t timeout_ms = 60000U) noexcept
         : deadline_ns_(start_ns + static_cast<std::int64_t>(timeout_ms) * 1000000LL) {}
 
     Result observe(std::int64_t now_ns, bool healthy) noexcept {
