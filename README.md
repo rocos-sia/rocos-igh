@@ -127,9 +127,11 @@ identity to IgH for strict matching.
 
 ## Additional docs
 
+- [主站启动步骤与参数说明](docs/master-startup.md)
 - [Architecture](docs/architecture.md)
 - [API guide](docs/api-guide.md)
 - [EtherCAT terminal commands](docs/ethercat-terminal-commands.md)
+- [实时 CPU 隔离与 GRUB 配置](docs/realtime-cpu-isolation.md)
 
 
 启用 DC 时，激活前设置初始单调时间、激活后立即刷新，以避免 DC 偏移初始化时
