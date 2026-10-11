@@ -63,10 +63,15 @@ bool EthercatMaster::initialize(unsigned int master_id,
                                 bool dc_enabled,
                                 std::uint32_t period_us,
                                 std::string &error,
-                                std::uint32_t preop_timeout_ms) {
+                                std::uint32_t preop_timeout_ms,
+                                std::uint32_t pdo_config_attempts) {
     error.clear();
     last_dc_error_ = DcError{};
 
+    if (pdo_config_attempts == 0U) {
+        error = "PDO configuration attempts must be positive";
+        return false;
+    }
     if (preop_timeout_ms == 0U) {
         error = "PREOP timeout must be positive";
         return false;
@@ -313,7 +318,7 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
     if (!pdo_verification_.configurePreop(master_, static_cast<std::uint32_t>(remaining_ms),
-                                         std::cerr, error)) {
+                                         std::cerr, error, pdo_config_attempts)) {
         reset();
         return false;
     }

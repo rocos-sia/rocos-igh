@@ -16,6 +16,7 @@ struct RuntimeOptions {
     std::string config_path;       ///< Required PDO YAML configuration path.
     std::uint32_t preop_timeout_ms{10000}; ///< PREOP startup timeout [ms], positive.
     std::uint32_t op_timeout_ms{60000}; ///< OP startup timeout [ms], positive.
+    std::uint32_t pdo_config_attempts{5}; ///< Total PREOP attempts per slave, positive.
     bool dc_enabled{false};        ///< True when Distributed Clocks are enabled.
     bool show_help{false};         ///< True when --help was requested.
 };
@@ -24,7 +25,7 @@ struct RuntimeOptions {
  * @brief Parses argv strictly into @p options.
  *
  * Accepts --config, --master-id, --period-us, --dc, --preop-timeout-ms,
- * --op-timeout-ms, --cpu, and --help. Rejects unknown
+ * --op-timeout-ms, --pdo-config-attempts, --cpu, and --help. Rejects unknown
  * flags, missing values, duplicates, signs, trailing characters, and overflow.
  *
  * @param argc    Argument count.

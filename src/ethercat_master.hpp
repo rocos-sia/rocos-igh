@@ -75,6 +75,7 @@ public:
      * @param config    Validated static slave configuration.
      * @param error     Receives a description of the first failure.
      * @param preop_timeout_ms Total PREOP readiness timeout in milliseconds (positive).
+     * @param pdo_config_attempts Maximum total PREOP configuration attempts per slave.
      * @return True on success.
      */
     bool initialize(unsigned int master_id,
@@ -82,7 +83,8 @@ public:
                     bool dc_enabled,
                     std::uint32_t period_us,
                     std::string &error,
-                    std::uint32_t preop_timeout_ms = 5000U);
+                    std::uint32_t preop_timeout_ms = 5000U,
+                    std::uint32_t pdo_config_attempts = 5U);
     /// @brief Receives a frame and processes both domains (rt_safe).
     void receiveAndProcess() noexcept;
     /// @brief Sets the DC application time for the current cycle (rt_safe).

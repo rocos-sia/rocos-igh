@@ -48,7 +48,8 @@ public:
     // timeout_ms is shared by all slaves/attempts; an in-flight IgH ioctl cannot
     // be cancelled by this budget. Its result is checked again after return.
     bool configurePreop(ec_master_t *master, std::uint32_t timeout_ms,
-                        std::ostream &log, std::string &error);
+                        std::ostream &log, std::string &error,
+                        std::uint32_t max_attempts = 5U);
     Result step(std::int64_t monotonic_ns) noexcept;
     void abort(Failure failure) noexcept;
     void reset() noexcept;

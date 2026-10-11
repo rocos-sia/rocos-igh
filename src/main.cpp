@@ -25,6 +25,8 @@
 #include <csignal>     // sig_atomic_t / sigaction / SIGINT / SIGTERM
 #include <cstring>     // std::strerror
 #include <ctime>       // clock_getres / CLOCK_MONOTONIC
+#include <iomanip>
+#include <sstream>
 #include <iostream>    // std::cout / std::cerr
 #include <sched.h>     // sched_param / SCHED_FIFO / sched_setscheduler
 #include <string>      // std::string
@@ -117,6 +119,49 @@ void printFinalStatistics(const rocos::CycleStatistics &stats, int run_result) {
               << " run_rc=" << run_result << '\n';                 // 运行返回码
 }
 
+// Only the ordinary-priority reporter formats or writes periodic diagnostics.
+void printRuntimeReport(unsigned int master_id, std::size_t slave_count,
+                        const rocos::RuntimeReport &report) {
+    const auto wcName = [](unsigned int state) {
+        switch (state) {
+        case EC_WC_ZERO: return "ZERO";
+        case EC_WC_INCOMPLETE: return "INCOMPLETE";
+        case EC_WC_COMPLETE: return "COMPLETE";
+        default: return "UNKNOWN";
+        }
+    };
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1)
+        << "[master " << master_id << "] window=" << report.window_seconds
+        << "s cycles=" << report.cycle.samples
+        << " link=" << (report.link_up ? "UP" : "DOWN")
+        << " slaves=" << report.responding_slaves << '/' << slave_count << " AL=";
+    // IgH reports a bitmask: mixed states must not be rendered as a single OP.
+    if (report.al_states == 0) out << "NONE";
+    if (report.al_states & EC_AL_STATE_INIT) out << "INIT ";
+    if (report.al_states & EC_AL_STATE_PREOP) out << "PREOP ";
+    if (report.al_states & EC_AL_STATE_SAFEOP) out << "SAFEOP ";
+    if (report.al_states & EC_AL_STATE_OP) out << "OP ";
+    out << "(0x" << std::hex << report.al_states << std::dec << ")"
+        << " authorized=" << report.authorized
+        << " input_wc=" << report.input_wc << '/' << wcName(report.input_wc_state)
+        << " output_wc=" << report.output_wc << '/' << wcName(report.output_wc_state) << '\n';
+    const auto timing = [&](const char *name, const rocos::TimingSummary &t) {
+        out << "  " << std::left << std::setw(22) << name
+            << " (min/avg/max) [us]: " << std::right
+            << t.minimum_us << " / " << t.average_us << " / " << t.maximum_us << '\n';
+    };
+    timing("Cycle Time", report.cycle);
+    timing("Task Duration", report.task);
+    timing("Receive / Process", report.receive);
+    timing("PDO Copy", report.pdo);
+    timing("Queue / Send", report.send);
+    out << "  window/total: missed_deadlines=" << report.missed << '/' << report.total_missed
+        << " wc_error_cycles=" << report.wc_errors << '/' << report.total_wc_errors
+        << " link_down_cycles=" << report.link_down << '/' << report.total_link_down << '\n';
+    std::cout << out.str() << std::flush;
+}
+
 }  // namespace（匿名命名空间，仅本文件可见）
 
 int main(int argc, char **argv) {
@@ -171,7 +216,8 @@ int main(int argc, char **argv) {
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
     rocos::EthercatMaster master; // RAII 封装一个 IgH 主站
     if (!master.initialize(options.master_id, config, options.dc_enabled,
-                           options.period_us, error, options.preop_timeout_ms)) { // 配置或激活失败
+                           options.period_us, error, options.preop_timeout_ms,
+                           options.pdo_config_attempts)) { // 配置或激活失败
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
@@ -207,18 +253,24 @@ int main(int argc, char **argv) {
     try {
         reporter = std::thread([&] {
             auto next_report = std::chrono::steady_clock::now();
+            bool ready_announced = false;
             for (;;) {
                 const bool stopped = reporter_stop.load();
-                if (cyclic_task.startupReady()) {
+                const bool ready = cyclic_task.startupReady();
+                if (ready && !ready_announced) {
                     std::cout << "[master " << options.master_id
                               << "] 全部从站就绪，可以开始工作（全部 RxPDO/TxPDO 分配及映射读回一致，OP、链路及输入/输出工作计数器连续 5 次检查正常）"
                               << std::endl;
-                    return;
+                    ready_announced = true;
+                }
+                rocos::RuntimeReport report;
+                if (cyclic_task.takeReport(report)) {
+                    printRuntimeReport(options.master_id, config.slave_count, report);
                 }
                 if (stopped) return;
                 const auto now = std::chrono::steady_clock::now();
                 const auto mask = cyclic_task.startupOpMask();
-                if (now >= next_report) {
+                if (!ready && now >= next_report) {
                     std::cout << "[master " << options.master_id << "] 等待 OP / PDO 读回验证，当前已进入 OP 的从站：";
                     std::size_t count = 0;
                     for (std::size_t i = 0; i < config.slave_count; ++i) {

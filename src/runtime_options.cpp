@@ -40,6 +40,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
     bool dc_seen = false;
     bool preop_timeout_seen = false;
     bool op_timeout_seen = false;
+    bool pdo_attempts_seen = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag(argv[i]);
@@ -49,7 +50,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         }
         if (flag != "--config" && flag != "--master-id" && flag != "--period-us" &&
             flag != "--dc" && flag != "--preop-timeout-ms" && flag != "--op-timeout-ms" &&
-            flag != "--cpu") {
+            flag != "--cpu" && flag != "--pdo-config-attempts") {
             error = "unknown option: " + std::string(flag);
             return false;
         }
@@ -95,6 +96,20 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         if (!parseUnsigned(value_text, parsed_value)) {
             error = "invalid value for option: " + std::string(flag);
             return false;
+        }
+
+        if (flag == "--pdo-config-attempts") {
+            if (pdo_attempts_seen) {
+                error = "duplicate option: --pdo-config-attempts";
+                return false;
+            }
+            if (parsed_value == 0 || parsed_value > std::numeric_limits<std::uint32_t>::max()) {
+                error = "pdo-config-attempts must be in [1, 4294967295]";
+                return false;
+            }
+            options.pdo_config_attempts = static_cast<std::uint32_t>(parsed_value);
+            pdo_attempts_seen = true;
+            continue;
         }
 
         if (flag == "--cpu") {
@@ -171,7 +186,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--help]\nCPU: non-negative logical CPU permitted by the kernel; explicit binding may expand inherited affinity (including isolated CPUs), subject to cpuset restrictions; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers.";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--pdo-config-attempts <count>] [--help]\nCPU: non-negative logical CPU permitted by the kernel; explicit binding may expand inherited affinity (including isolated CPUs), subject to cpuset restrictions; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers. PDO configuration attempts per slave default: 5 (including the first attempt); must be positive.";
 }
 
 }  // namespace rocos

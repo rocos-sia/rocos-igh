@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <ctime>
 
+#include "runtime_report.hpp"
+
 namespace rocos {
 
 struct BusState;
@@ -105,7 +107,9 @@ public:
     /**
      * @brief Returns the statistics accumulated during run().
      */
+    // Read statistics() only after run() returns; live readers use takeReport().
     const CycleStatistics &statistics() const noexcept;
+    bool takeReport(RuntimeReport &report) noexcept { return reports_.consume(report); }
 
     std::uint64_t startupOpMask() const noexcept { return startup_op_mask_.load(); }
     bool startupReady() const noexcept { return startup_ready_.load(); }
@@ -116,6 +120,7 @@ private:
     std::uint32_t period_us_;
     std::uint32_t op_timeout_ms_;
     CycleStatistics statistics_{};
+    RuntimeReportMailbox reports_;
     std::atomic<std::uint64_t> startup_op_mask_{0};
     std::atomic<bool> startup_ready_{false};
 };

@@ -48,4 +48,32 @@ bool testCpuOptions() {
     return true;
 }
 
-int main() { return testCpuOptions() ? 0 : 1; }
+bool testPdoAttempts() {
+    char program[] = "master", config_flag[] = "--config", config[] = "pdo.yaml";
+    char flag[] = "--pdo-config-attempts";
+    rocos::RuntimeOptions options;
+    std::string error;
+    char *defaults[]{program, config_flag, config};
+    CHECK(rocos::parseRuntimeOptions(3, defaults, options, error));
+    CHECK(options.pdo_config_attempts == 5);
+    for (std::string value : {"1", "5", "8", "4294967295"}) {
+        char *args[]{program, config_flag, config, flag, value.data()};
+        CHECK(rocos::parseRuntimeOptions(5, args, options, error));
+        CHECK(options.pdo_config_attempts == std::stoull(value));
+        char *duplicate[]{program, config_flag, config, flag, value.data(), flag, value.data()};
+        CHECK(!rocos::parseRuntimeOptions(7, duplicate, options, error));
+        CHECK(error.find("duplicate") != std::string::npos);
+    }
+    for (std::string value : {"0", "-1", "+1", "", "1.5", "5x", "4294967296", "18446744073709551616"}) {
+        char *args[]{program, config_flag, config, flag, value.data()};
+        CHECK(!rocos::parseRuntimeOptions(5, args, options, error));
+    }
+    char *missing[]{program, config_flag, config, flag};
+    CHECK(!rocos::parseRuntimeOptions(4, missing, options, error));
+    CHECK(rocos::parseRuntimeOptions(3, defaults, options, error));
+    CHECK(options.pdo_config_attempts == 5);
+    CHECK(std::string(rocos::runtimeOptionsUsage()).find(flag) != std::string::npos);
+    return true;
+}
+
+int main() { return testCpuOptions() && testPdoAttempts() ? 0 : 1; }

@@ -282,8 +282,10 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             return EIO;
         }
 
+        timespec finish_time{};
+        if (clock_gettime(CLOCK_MONOTONIC, &finish_time) != 0) return errno;
         std::uint64_t missed = 0U;
-        deadline = advanceDeadline(deadline, period_us_, wake_time, missed);
+        deadline = advanceDeadline(deadline, period_us_, finish_time, missed);
         statistics_.missed_deadlines += missed;
         last_wake = wake_time;
     }
@@ -292,6 +294,10 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         return 0;
     }
     startup_ready_.store(true);
+    RuntimeReport window{};
+    std::uint64_t total_wc_errors = 0, total_link_down = 0;
+    timespec window_start{};
+    if (clock_gettime(CLOCK_MONOTONIC, &window_start) != 0) return errno;
 
     while (!stop_requested) {
         int sleep_rc = 0;
@@ -318,9 +324,13 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             return EIO;
         }
 
-        statistics_.current_us = elapsedMicroseconds(last_wake, wake_time);
+        const double cycle_us = elapsedMicroseconds(last_wake, wake_time);
+        statistics_.current_us = cycle_us;
 
+        timespec receive_begin{}, receive_end{}, pdo_end{}, send_begin{}, send_end{};
+        if (clock_gettime(CLOCK_MONOTONIC, &receive_begin) != 0) return errno;
         master_.receiveAndProcess();
+        if (clock_gettime(CLOCK_MONOTONIC, &receive_end) != 0) return errno;
 
         copyProcessData(master_.inputData(),
                         master_.inputSize(),
@@ -328,21 +338,56 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
                         ipc_.pdOutputPtr,
                         master_.outputData(),
                         master_.outputSize());
+        if (clock_gettime(CLOCK_MONOTONIC, &pdo_end) != 0) return errno;
 
         const BusState state = master_.readState();
         if (ipc_.ecatBus != nullptr) {
             updateSharedBus(state, statistics_, period_us_, toMicroseconds(wake_time), *ipc_.ecatBus);
         }
 
+        if (clock_gettime(CLOCK_MONOTONIC, &send_begin) != 0) return errno;
         if (!master_.queueAndSend()) {
             return EIO;
         }
+        if (clock_gettime(CLOCK_MONOTONIC, &send_end) != 0) return errno;
         (void)ipc_.notifyClients();
 
+        timespec finish_time{};
+        if (clock_gettime(CLOCK_MONOTONIC, &finish_time) != 0) return errno;
         std::uint64_t missed = 0U;
-        deadline = advanceDeadline(deadline, period_us_, wake_time, missed);
+        deadline = advanceDeadline(deadline, period_us_, finish_time, missed);
         statistics_.missed_deadlines += missed;
         last_wake = wake_time;
+
+        window.cycle.add(cycle_us);
+        window.task.add(elapsedMicroseconds(wake_time, finish_time));
+        window.receive.add(elapsedMicroseconds(receive_begin, receive_end));
+        window.pdo.add(elapsedMicroseconds(receive_end, pdo_end));
+        window.send.add(elapsedMicroseconds(send_begin, send_end));
+        window.missed += missed;
+        const bool wc_error = state.input_wc_state != EC_WC_COMPLETE ||
+                              state.output_wc_state != EC_WC_COMPLETE;
+        window.wc_errors += wc_error;
+        window.link_down += !state.link_up;
+        total_wc_errors += wc_error;
+        total_link_down += !state.link_up;
+        if (toNanoseconds(finish_time) - toNanoseconds(window_start) >= kNsecPerSec) {
+            window.window_seconds = elapsedMicroseconds(window_start, finish_time) / 1e6;
+            window.responding_slaves = state.responding_slaves;
+            window.al_states = state.al_states;
+            window.input_wc = state.input_working_counter;
+            window.output_wc = state.output_working_counter;
+            window.input_wc_state = static_cast<unsigned int>(state.input_wc_state);
+            window.output_wc_state = static_cast<unsigned int>(state.output_wc_state);
+            window.link_up = state.link_up;
+            window.authorized = ipc_.ecatBus != nullptr && ipc_.ecatBus->is_authorized;
+            window.total_missed = statistics_.missed_deadlines;
+            window.total_wc_errors = total_wc_errors;
+            window.total_link_down = total_link_down;
+            (void)reports_.publish(window);
+            window = {};
+            window_start = finish_time;
+        }
     }
 
     return 0;

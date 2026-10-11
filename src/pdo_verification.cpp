@@ -173,8 +173,13 @@ bool PdoVerification::compare(const std::uint8_t *data, std::size_t size) noexce
 }
 
 bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_ms,
-                                      std::ostream &log, std::string &error) {
+                                      std::ostream &log, std::string &error,
+                                      std::uint32_t max_attempts) {
     error.clear();
+    if (max_attempts == 0U) {
+        error = "PDO configuration attempts must be positive";
+        return false;
+    }
     const auto report = [&] {
         std::ostringstream message;
         printError(message);
@@ -217,7 +222,7 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
         while (end < checks_.size() &&
                checks_[end].slave_index == checks_[begin].slave_index) ++end;
         bool verified = false;
-        for (unsigned int attempt = 1; attempt <= 3; ++attempt) {
+        for (std::uint64_t attempt = 1; attempt <= max_attempts; ++attempt) {
             result_ = Result::Pending;
             error_ = {};
             for (unsigned int phase = 0; phase < 6 && result_ == Result::Pending; ++phase) {
@@ -260,11 +265,11 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
             }
             if (result_ == Result::Pending) {
                 log << "PREOP PDO configuration verified: slave[position="
-                    << checks_[begin].slave_position << "] attempt=" << attempt << "/3\n";
+                    << checks_[begin].slave_position << "] attempt=" << attempt << "/" << max_attempts << '\n';
                 verified = true;
                 break;
             }
-            log << "PREOP PDO attempt=" << attempt << "/3 ";
+            log << "PREOP PDO attempt=" << attempt << "/" << max_attempts << ' ';
             printError(log);
             if (error_.failure == Failure::PreopState ||
                 error_.failure == Failure::PreopTimeout || error_.failure == Failure::Clock)

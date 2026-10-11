@@ -52,6 +52,10 @@ rocos::CyclicTask *task = nullptr;
 rocos::SharedMemoryConfig *ipc = nullptr;
 std::uint8_t *output = nullptr;
 bool saw_business_output = false;
+unsigned int runtime_target = 1, runtime_sends = 0, report_count = 0;
+unsigned int unauthorized_cycles = 0;
+bool runtime_diagnostics = false;
+std::array<rocos::RuntimeReport, 3> runtime_reports{};
 unsigned int downloads = 0, uploads = 0, second_slave_ops = 0;
 unsigned int first_slave_reads_at_second_write = 0;
 int preop_fault = 0, faults_left = 0;
@@ -77,6 +81,8 @@ void resetFake() {
     now_ns = wake_jump_ns = 0;
     stop = nullptr; task = nullptr; ipc = nullptr; output = nullptr;
     saw_business_output = false;
+    runtime_target = 1; runtime_sends = report_count = unauthorized_cycles = 0;
+    runtime_diagnostics = false; runtime_reports = {};
     rt_allocations = 0;
     downloads = uploads = second_slave_ops = first_slave_reads_at_second_write = 0;
     preop_fault = faults_left = 0;
@@ -241,20 +247,28 @@ extern "C" int __wrap_clock_gettime(clockid_t, timespec *t) {
     return 0;
 }
 extern "C" int __wrap_clock_nanosleep(clockid_t, int, const timespec *t, timespec *) {
-    now_ns = std::int64_t{t->tv_sec} * 1000000000 + t->tv_nsec + wake_jump_ns;
+    const auto deadline = std::int64_t{t->tv_sec} * 1000000000 + t->tv_nsec;
+    if (runtime_diagnostics && deadline <= now_ns) invariant_failed = true;
+    now_ns = deadline + wake_jump_ns;
     wake_jump_ns = 0;
     return 0;
 }
-extern "C" int __wrap_ecrt_master_receive(ec_master_t *) { return 0; }
+extern "C" int __wrap_ecrt_master_receive(ec_master_t *) {
+    if (runtime_diagnostics && task && task->startupReady()) now_ns += 20000;
+    return 0;
+}
 extern "C" int __wrap_ecrt_domain_process(ec_domain_t *) { return 0; }
 extern "C" int __wrap_ecrt_master_state(const ec_master_t *, ec_master_state_t *s) {
     s->slaves_responding = 2; s->al_states = EC_AL_STATE_OP;
     s->link_up = !(health_loss && read_calls > 0);
+    if (runtime_diagnostics && runtime_sends >= 20 && runtime_sends < 25) s->link_up = false;
     return 0;
 }
 extern "C" int __wrap_ecrt_domain_state(const ec_domain_t *, ec_domain_state_t *s) {
     s->working_counter = 2;
     s->wc_state = health_fault == 1 && read_calls > 0 ? EC_WC_INCOMPLETE : EC_WC_COMPLETE;
+    if (runtime_diagnostics && runtime_sends >= 10 && runtime_sends < 20)
+        s->wc_state = EC_WC_INCOMPLETE;
     return 0;
 }
 extern "C" int __wrap_ecrt_slave_config_state(const ec_slave_config_t *, ec_slave_config_state_t *s) {
@@ -273,7 +287,16 @@ extern "C" int __wrap_ecrt_master_send(ec_master_t *) {
                 *static_cast<std::uint8_t *>(ipc->pdInputPtr) != 0) invariant_failed = true;
         } else {
             saw_business_output = *output == 0xab;
-            *stop = 1;
+            if (runtime_diagnostics) {
+                if (!ipc->ecatBus->is_authorized) ++unauthorized_cycles;
+                now_ns += runtime_sends == 0 ? 2300000 : 30000;
+                rocos::RuntimeReport report;
+                if (task->takeReport(report)) {
+                    if (report_count < runtime_reports.size()) runtime_reports[report_count++] = report;
+                    else invariant_failed = true;
+                }
+            }
+            if (++runtime_sends >= runtime_target) *stop = 1;
         }
     }
     if (sends > 10000 && stop) *stop = 1;
@@ -439,7 +462,7 @@ bool preopTests() {
         std::ostringstream attempt_log;
         CHECK(v.configurePreop(master,5000,attempt_log,error));
         CHECK(!v.started() && !v.complete() && !invariant_failed);
-        CHECK(attempt_log.str().find("attempt=2/3") != std::string::npos);
+        CHECK(attempt_log.str().find("attempt=2/5") != std::string::npos);
         if (std::get<0>(item.first) == 1) {
             CHECK(std::count_if(writes.begin(),writes.end(),[](const auto &w) {
                 return std::get<0>(std::get<0>(w)) == 0;
@@ -447,13 +470,13 @@ bool preopTests() {
         }
     }
     for (int fault = 1; fault <= 4; ++fault) {
-        for (int count : {1,2,3}) {
+        for (int count : {1,2,3,4,5}) {
             resetFake(); preop_fault = fault; faults_left = count;
             fault_key = {0,0x1a07,2};
             CHECK(v.prepare(f.config,f.handles,error));
             std::ostringstream attempt_log;
             const bool ok = v.configurePreop(master,5000,attempt_log,error);
-            CHECK(ok == (count < 3));
+            CHECK(ok == (count < 5));
             CHECK(!invariant_failed && !v.complete() && !v.started());
             if (!ok) {
                 CHECK(second_slave_ops == 0);
@@ -463,6 +486,25 @@ bool preopTests() {
             }
         }
     }
+    // Explicit limits apply independently of the default, including > 5.
+    for (std::uint32_t limit : {1U, 3U, 8U}) {
+        for (bool succeed : {false, true}) {
+            resetFake(); preop_fault = 1;
+            faults_left = static_cast<int>(limit) - (succeed ? 1 : 0);
+            CHECK(v.prepare(f.config,f.handles,error));
+            std::ostringstream attempt_log;
+            CHECK(v.configurePreop(master,5000,attempt_log,error,limit) == succeed);
+            CHECK(!invariant_failed);
+            if (!succeed) CHECK(downloads == limit && second_slave_ops == 0);
+            CHECK(attempt_log.str().find("attempt=" + std::to_string(limit) + "/" +
+                                        std::to_string(limit)) != std::string::npos);
+        }
+    }
+    resetFake();
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(!v.configurePreop(master,5000,log,error,0));
+    CHECK(downloads == 0 && uploads == 0);
+
     // State/query failures and timeout stop immediately, without another write.
     for (int fault = 0; fault < 5; ++fault) {
         resetFake();
@@ -501,7 +543,7 @@ bool preopTests() {
 bool cyclicTests() {
     // Real cyclic loop + fake transport/clock: client output must remain gated
     // even when OP and WCs are healthy throughout a failed verification.
-    for (int scenario = 0; scenario < 9; ++scenario) {
+    for (int scenario = 0; scenario < 10; ++scenario) {
         resetFake();
         Fixture f;
         rocos::EthercatMaster master;
@@ -519,6 +561,7 @@ bool cyclicTests() {
         if (scenario == 6) health_fault = 1;
         if (scenario == 7) health_fault = 2;
         if (scenario == 8) read_rc = -EIO;
+        if (scenario == 9) { runtime_diagnostics = true; runtime_target = 2100; }
         rocos::SharedMemoryConfig shared(700000 + getpid()*16 + scenario);
         CHECK(shared.createSharedMemory() && shared.createPdDataMemoryProvider(1,1));
         shared.ecatBus->slave_num = 2;
@@ -531,11 +574,36 @@ bool cyclicTests() {
         forbid_allocations = false;
         CHECK(!invariant_failed && rt_allocations == 0);
         CHECK(sends > 0); // Communication progressed while verifying.
-        if (scenario == 0) {
+        if (scenario == 0 || scenario == 9) {
             CHECK(rc == 0 && cyclic.startupReady() && saw_business_output);
             CHECK(shared.ecatBus->is_authorized);
             CHECK(*static_cast<std::uint8_t *>(shared.pdInputPtr) == 0x55);
             CHECK(sem_trywait(shared.sem_mutex[0]) == 0);
+            if (scenario == 9) {
+                CHECK(report_count == 2 && unauthorized_cycles == 15);
+                CHECK(cyclic.statistics().missed_deadlines == 2);
+                const auto &first = runtime_reports[0];
+                const auto &second = runtime_reports[1];
+                CHECK(first.window_seconds >= 1.0 && first.window_seconds < 1.001);
+                CHECK(first.cycle.samples == 998 && second.cycle.samples == 1000);
+                CHECK(first.cycle.minimum_us == 1000 && first.cycle.maximum_us == 3000);
+                CHECK(first.cycle.average_us > 1002 && first.cycle.average_us < 1003);
+                CHECK(first.task.minimum_us == 50 && first.task.maximum_us == 2320);
+                CHECK(first.receive.minimum_us == 20 && first.receive.maximum_us == 20);
+                CHECK(first.send.minimum_us == 30 && first.send.maximum_us == 2300);
+                CHECK(first.pdo.maximum_us == 0);
+                CHECK(first.missed == 2 && first.total_missed == 2);
+                CHECK(first.wc_errors == 10 && first.total_wc_errors == 10);
+                CHECK(first.link_down == 5 && first.total_link_down == 5);
+                CHECK(second.cycle.minimum_us == 1000 && second.cycle.maximum_us == 1000);
+                CHECK(second.task.maximum_us == 50 && second.send.maximum_us == 30);
+                CHECK(second.missed == 0 && second.total_missed == 2);
+                CHECK(second.wc_errors == 0 && second.total_wc_errors == 10);
+                CHECK(second.link_down == 0 && second.total_link_down == 5);
+                CHECK(second.authorized && second.link_up && second.responding_slaves == 2);
+                CHECK(second.al_states == EC_AL_STATE_OP && second.input_wc == 2 && second.output_wc == 2);
+                CHECK(second.input_wc_state == EC_WC_COMPLETE && second.output_wc_state == EC_WC_COMPLETE);
+            }
         } else {
             CHECK(rc != 0 && !cyclic.startupReady() && !saw_business_output);
             CHECK(out[0] == 0 && !shared.ecatBus->is_authorized);
