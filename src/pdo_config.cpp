@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <type_traits>
 
 namespace rocos {
 namespace {
@@ -141,6 +142,45 @@ bool parseBoolean(const YAML::Node &node, const std::string &path) {
     throw std::runtime_error(path + " must be a boolean");
 }
 
+RuntimeOptions parseMasterOptions(const YAML::Node &node) {
+    if (!node.IsMap()) {
+        throw std::runtime_error("master must be a mapping");
+    }
+    rejectUnknownKeys(node, {"master_id", "period_us", "cpu", "dc",
+                            "preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts"},
+                      "master");
+    RuntimeOptions options;
+    const auto integer = [&](const char *key, auto &value, std::uint64_t minimum) {
+        if (!node[key]) return;
+        using T = std::decay_t<decltype(value)>;
+        const std::string path = std::string("master.") + key;
+        const auto parsed = parseUnsigned(node[key], path, std::numeric_limits<T>::max());
+        if (parsed < minimum) {
+            throw std::runtime_error(path + " must be >= " + std::to_string(minimum));
+        }
+        value = static_cast<T>(parsed);
+    };
+    integer("master_id", options.master_id, 0);
+    integer("period_us", options.period_us, 1000);
+    integer("preop_timeout_ms", options.preop_timeout_ms, 1);
+    integer("op_timeout_ms", options.op_timeout_ms, 1);
+    integer("pdo_config_attempts", options.pdo_config_attempts, 1);
+    if (node["cpu"] && !node["cpu"].IsNull()) {
+        unsigned int cpu = 0;
+        integer("cpu", cpu, 0);
+        options.cpu = cpu;
+    }
+    if (node["dc"]) {
+        const auto dc = parseString(node["dc"], "master.dc", 3);
+        if (dc != "on" && dc != "off") {
+            throw std::runtime_error("master.dc must be on or off");
+        }
+        options.dc_enabled = dc == "on";
+    }
+    // Cross-field DC/period validation runs after the CLI overrides are merged.
+    return options;
+}
+
 DistributedClockConfig parseDistributedClock(const YAML::Node &node,
                                               const std::string &path) {
     if (!node.IsMap()) {
@@ -252,7 +292,7 @@ bool loadPdoConfig(const std::string &path,
         if (!root.IsMap()) {
             throw std::runtime_error("root must be a mapping");
         }
-        rejectUnknownKeys(root, {"version", "slaves"}, "root");
+        rejectUnknownKeys(root, {"version", "master", "slaves"}, "root");
 
         const std::uint64_t version = parseUnsigned(
             requireNode(root, "version", "root"), "version",
@@ -270,6 +310,7 @@ bool loadPdoConfig(const std::string &path,
         }
 
         PdoBusConfig loaded;
+        if (root["master"]) loaded.master = parseMasterOptions(root["master"]);
         loaded.slaves.reserve(slaves.size());
         for (std::size_t slave_index = 0; slave_index < slaves.size(); ++slave_index) {
             const YAML::Node slave_node = slaves[slave_index];

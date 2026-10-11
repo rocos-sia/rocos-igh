@@ -177,6 +177,17 @@ int main(int argc, char **argv) {
         return EXIT_SUCCESS; // 正常退出
     }
 
+    // Load PDOs and startup defaults once, then overlay only explicit CLI flags.
+    rocos::PdoBusConfig pdo_config;
+    if (!rocos::loadPdoConfig(options.config_path, pdo_config, error)) {
+        std::cerr << error << '\n';
+        return EXIT_FAILURE;
+    }
+    if (!rocos::parseRuntimeOptions(argc, argv, options, error, pdo_config.master)) {
+        std::cerr << error << '\n';
+        return EXIT_FAILURE;
+    }
+
     // Validate before reserving the master or changing any slave configuration.
     if (options.cpu && !rocos::validateThreadCpu(*options.cpu, error)) {
         std::cerr << error << '\n';
@@ -193,13 +204,7 @@ int main(int argc, char **argv) {
                   << " ns; expected 1 ns high-resolution clock\n";
     }
 
-    // —— 第二步：加载 YAML PDO 配置并构建 IgH 配置视图 ——
-    rocos::PdoBusConfig pdo_config;
-    if (!rocos::loadPdoConfig(options.config_path, pdo_config, error)) {
-        std::cerr << error << '\n';
-        return EXIT_FAILURE;
-    }
-
+    // —— 第二步：将已加载的 PDO 配置构建为 IgH 配置视图 ——
     rocos::LoadedSlaveConfig loaded_config;
     if (!loaded_config.build(std::move(pdo_config), error)) {
         std::cerr << error << '\n';

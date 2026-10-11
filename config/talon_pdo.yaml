@@ -1,5 +1,47 @@
 version: 1
 
+# 启动参数：命令行显式参数 > 此处配置 > 程序默认值。
+# master 块及其全部字段均可选；省略字段时使用对应的程序默认值。
+# 配置仅在启动时读取，命令行覆盖不会修改本文件。
+# --config <path>、--help 仅用于命令行，不属于 YAML 字段。
+master:
+  # 可选，默认 0。非负 IgH 主站编号，必须对应系统中已配置的主站。
+  # 同时决定 IPC 名称，例如 0 对应 ecm0、pd_input0、pd_output0、sync0_*。
+  # 命令行覆盖：--master-id <id>
+  master_id: 0
+
+  # 可选，默认 1000。周期，单位 μs；范围 1000..4294967295（下限 1 ms）。
+  # 启用 DC 时最终值不得超过 4294967，SYNC0 周期由此值乘以 1000 得到（ns）。
+  # 命令行覆盖：--period-us <us>
+  period_us: 1000
+
+  # 可选，默认 null。null 沿用启动时的 CPU 亲和性；非负整数指定逻辑 CPU 编号。
+  # 仅绑定周期线程；目标 CPU 必须在线且允许当前进程使用，启动时会验证。
+  # 命令行覆盖：--cpu <id>；--cpu auto 可临时取消此处设置的绑定。
+  cpu: null
+
+  # 可选，默认 off。仅接受小写 on / off；dc: off 和 dc: "off" 均可。
+  # on 启用下方 slaves[].dc 配置，要求至少一个从站配置 DC，且恰有一个 reference: true。
+  # off 不应用从站 DC 配置。命令行覆盖：--dc <on|off>
+  dc: "off"
+
+  # 可选，默认 10000。PREOP 阶段总超时，单位 ms；范围 1..4294967295。
+  # 等待 PREOP、全部从站 PDO 写入、读回和重试共用此预算，不按从站或尝试重新计时。
+  # 已发出的阻塞 SDO 调用无法用此预算中断，返回后检查是否超时。
+  # 命令行覆盖：--preop-timeout-ms <ms>
+  preop_timeout_ms: 10000
+
+  # 可选，默认 60000。激活后的启动总超时，单位 ms；范围 1..4294967295。
+  # 包含等待全部从站进入 OP、PDO 再次读回验证及链路/工作计数器连续健康检查。
+  # 命令行覆盖：--op-timeout-ms <ms>
+  op_timeout_ms: 60000
+
+  # 可选，默认 5。每个从站在 PREOP 下配置 PDO 的最大总尝试次数，包含首次。
+  # 范围 1..4294967295；成功即停止，失败重做当前从站完整写入及读回。
+  # 仍受 preop_timeout_ms 限制；增加次数不会自动延长总超时。
+  # 命令行覆盖：--pdo-config-attempts <count>
+  pdo_config_attempts: 5
+
 slaves:
   - id: 0
     name: Elmo Twitter Drive

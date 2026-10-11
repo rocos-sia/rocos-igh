@@ -90,6 +90,118 @@ bool expectConfigError(const std::string &yaml, const std::string &error_fragmen
     return true;
 }
 
+bool testMasterOptions() {
+    const TemporaryYamlFile file(validYaml() + R"yaml(
+master:
+  master_id: 2
+  period_us: 2000
+  cpu: 3
+  dc: "on"
+  preop_timeout_ms: 30000
+  op_timeout_ms: 90000
+  pdo_config_attempts: 8
+)yaml");
+    rocos::PdoBusConfig config;
+    rocos::RuntimeOptions options;
+    std::string error;
+    CHECK(rocos::loadPdoConfig(file.path(), config, error));
+    char program[] = "master", flag[] = "--config";
+    std::string path = file.path();
+    char *args[]{program, flag, path.data()};
+    CHECK(rocos::parseRuntimeOptions(3, args, options, error, config.master));
+    CHECK(options.config_path == path && !options.show_help);
+    CHECK(options.master_id == 2 && options.period_us == 2000 && options.cpu == 3);
+    CHECK(options.dc_enabled && options.preop_timeout_ms == 30000);
+    CHECK(options.op_timeout_ms == 90000 && options.pdo_config_attempts == 8);
+
+    char period[] = "--period-us", period_value[] = "1000";
+    char dc[] = "--dc", off[] = "off", cpu[] = "--cpu", cpu_value[] = "0";
+    char *partial[]{program, period, period_value, flag, path.data(), dc, off, cpu, cpu_value};
+    CHECK(rocos::parseRuntimeOptions(9, partial, options, error, config.master));
+    CHECK(options.period_us == 1000 && !options.dc_enabled && options.cpu == 0);
+    CHECK(options.master_id == 2 && options.preop_timeout_ms == 30000);
+    CHECK(options.op_timeout_ms == 90000 && options.pdo_config_attempts == 8);
+    // Explicit values equal to built-in defaults still override YAML values.
+    char master[] = "--master-id", zero[] = "0", preop[] = "--preop-timeout-ms", preop_value[] = "10000";
+    char op[] = "--op-timeout-ms", op_value[] = "60000", attempts[] = "--pdo-config-attempts", five[] = "5";
+    char *remaining[]{program, flag, path.data(), master, zero, preop, preop_value,
+                      op, op_value, attempts, five};
+    CHECK(rocos::parseRuntimeOptions(11, remaining, options, error, config.master));
+    CHECK(options.master_id == 0 && options.preop_timeout_ms == 10000);
+    CHECK(options.op_timeout_ms == 60000 && options.pdo_config_attempts == 5);
+    CHECK(options.period_us == 2000 && options.cpu == 3 && options.dc_enabled);
+    CHECK(config.master.master_id == 2 && config.master.cpu == 3); // No mutation of YAML defaults.
+
+    char automatic[] = "auto";
+    char *unbind[]{program, flag, path.data(), cpu, automatic};
+    CHECK(rocos::parseRuntimeOptions(5, unbind, options, error, config.master));
+    CHECK(!options.cpu.has_value());
+    char *duplicate[]{program, flag, path.data(), cpu, automatic, cpu, cpu_value};
+    CHECK(!rocos::parseRuntimeOptions(7, duplicate, options, error, config.master));
+    CHECK(error.find("duplicate") != std::string::npos);
+
+    // Validate the combined DC and period, allowing a CLI override to fix it.
+    const TemporaryYamlFile large_period(validYaml() + "master: {dc: on, period_us: 4294968}\n");
+    CHECK(rocos::loadPdoConfig(large_period.path(), config, error));
+    CHECK(!rocos::parseRuntimeOptions(3, args, options, error, config.master));
+    CHECK(error.find("DC SYNC0") != std::string::npos);
+    CHECK(rocos::parseRuntimeOptions(9, partial, options, error, config.master));
+    char *dc_off[]{program, flag, path.data(), dc, off};
+    CHECK(rocos::parseRuntimeOptions(5, dc_off, options, error, config.master));
+    CHECK(options.period_us == 4294968 && !options.dc_enabled);
+    const TemporaryYamlFile long_off(validYaml() + "master: {dc: off, period_us: 4294968}\n");
+    CHECK(rocos::loadPdoConfig(long_off.path(), config, error));
+    char on[] = "on";
+    char *dc_on[]{program, flag, path.data(), dc, on};
+    CHECK(!rocos::parseRuntimeOptions(5, dc_on, options, error, config.master));
+
+    // Absent blocks, empty blocks and explicit null CPU all retain defaults.
+    for (const std::string &block : {"", "master: {}\n", "master: {cpu: null}\n"}) {
+        const TemporaryYamlFile defaults(validYaml() + block);
+        CHECK(rocos::loadPdoConfig(defaults.path(), config, error));
+        CHECK(rocos::parseRuntimeOptions(3, args, options, error, config.master));
+        CHECK(options.master_id == 0 && options.period_us == 1000 && !options.cpu);
+        CHECK(!options.dc_enabled && options.preop_timeout_ms == 10000);
+        CHECK(options.op_timeout_ms == 60000 && options.pdo_config_attempts == 5);
+    }
+    CHECK(rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/talon_pdo.yaml", config, error));
+    CHECK(config.master.period_us == 1000 && config.master.pdo_config_attempts == 5);
+    CHECK(!config.slaves.empty() && config.slaves[0].rx_pdos[0].index == 0x1607);
+    return true;
+}
+
+bool testInvalidMasterOptions() {
+    for (const std::string &key : {"master_id", "period_us", "cpu", "preop_timeout_ms",
+                                   "op_timeout_ms", "pdo_config_attempts"}) {
+        for (const std::string &value : {"-1", "+1", "1.5", "true", "[]", "{}", "\"1000\"",
+                                         "4294967296", "18446744073709551616"}) {
+            CHECK(expectConfigError(validYaml() + "master: {" + key + ": " + value + "}\n",
+                                    "master." + key));
+        }
+        CHECK(expectConfigError(validYaml() + "master: {" + key + ": 1000, " + key + ": 2000}\n",
+                                "master." + key + " is duplicated"));
+        if (key != "cpu") {
+            CHECK(expectConfigError(validYaml() + "master: {" + key + ": null}\n", "master." + key));
+        }
+    }
+    for (const std::string &key : {"period_us", "preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts"}) {
+        CHECK(expectConfigError(validYaml() + "master: {" + key + ": 0}\n", "master." + key));
+    }
+    CHECK(expectConfigError(validYaml() + "master: {period_us: 999}\n", "master.period_us"));
+    for (const std::string &value : {"true", "false", "1", "null", "[]", "enabled"}) {
+        CHECK(expectConfigError(validYaml() + "master: {dc: " + value + "}\n", "master.dc"));
+    }
+    for (const std::string &key : {"unknown", "period-us", "config", "help"}) {
+        CHECK(expectConfigError(validYaml() + "master: {" + key + ": 1}\n", "master." + key));
+    }
+    CHECK(expectConfigError(validYaml() + "master: {dc: on, dc: off}\n", "master.dc is duplicated"));
+    CHECK(expectConfigError(validYaml() + "master: {}\nmaster: {}\n", "root.master is duplicated"));
+    for (const std::string &value : {"null", "[]", "true", "1000"}) {
+        CHECK(expectConfigError(validYaml() + "master: " + value + "\n", "master must be a mapping"));
+    }
+    return true;
+}
+
 bool testLoadsValidMultiSlaveConfig() {
     const TemporaryYamlFile file(R"yaml(
 version: 1
@@ -317,6 +429,7 @@ slaves:
 }  // namespace
 
 int main() {
+  if (!testMasterOptions() || !testInvalidMasterOptions()) return 1;
   if (!testLoadsValidMultiSlaveConfig()) {
     return 1;
   }

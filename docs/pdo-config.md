@@ -1,7 +1,8 @@
 # PDO YAML 配置规范
 
 主站通过启动参数 `--config <path>` 加载 PDO 配置。配置文件使用 YAML，当前
-格式版本为 `1`。
+格式版本为 `1`。同一文件的可选 `master` 块可配置主站启动参数；
+命令行显式参数覆盖 YAML，未配置字段使用程序默认值。`--config` 始终由命令行指定。
 
 ```bash
 ./build-master/rocos_igh_master \
@@ -19,6 +20,15 @@ EtherCAT 主站和创建共享内存之前退出。错误信息包含文件路�
 
 ```yaml
 version: 1
+
+master:                       # 可选；此处列出程序默认值
+  master_id: 0
+  period_us: 1000
+  cpu: null                   # null 沿用原有亲和性；整数指定逻辑 CPU
+  dc: "off"
+  preop_timeout_ms: 10000
+  op_timeout_ms: 60000
+  pdo_config_attempts: 5
 
 slaves:
   - id: 0
@@ -64,6 +74,14 @@ ZeroErr ESI 验证的 DC 配置。
 | 路径 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
 | `version` | 无符号整数 | 必须为 `1` | 配置格式版本 |
+| `master` | 映射 | 可选 | 主站启动参数，所有子字段均可省略 |
+| `master.master_id` | 无符号整数 | 默认 `0` | 对应 `--master-id` |
+| `master.period_us` | 无符号 32 位整数 | `>= 1000`，默认 `1000` | 对应 `--period-us`，单位 μs |
+| `master.cpu` | 无符号整数或 null | 默认 `null` | 对应 `--cpu`；`null` 沿用亲和性，CLI `--cpu auto` 可取消 YAML 绑定 |
+| `master.dc` | 字符串 | `"on"` / `"off"`，默认 `"off"` | 对应 `--dc`，控制是否应用从站 DC 参数 |
+| `master.preop_timeout_ms` | 无符号 32 位整数 | `>= 1`，默认 `10000` | 对应 `--preop-timeout-ms`，包含全部从站 PREOP 配置及读回 |
+| `master.op_timeout_ms` | 无符号 32 位整数 | `>= 1`，默认 `60000` | 对应 `--op-timeout-ms` |
+| `master.pdo_config_attempts` | 无符号 32 位整数 | `>= 1`，默认 `5` | 对应 `--pdo-config-attempts`，每从站总尝试次数，包含首次 |
 | `slaves` | 序列 | 1 到 50 项 | 按 EtherCAT 总线物理顺序排列的从站 |
 | `slaves[].id` | 无符号 16 位整数 | 从 `0` 连续递增，必须等于序列下标 | 从站编号及物理位置 |
 | `slaves[].name` | 字符串 | 非空，最多 79 字节 | 终端和共享内存中显示的从站名称 |
@@ -83,18 +101,20 @@ ZeroErr ESI 验证的 DC 配置。
 | `entries[].bit_length` | 无符号 8 位整数 | `8` 到 `248`，且为 8 的倍数 | PDO 条目位宽 |
 
 整数可以写成十进制或带 `0x` 前缀的十六进制，不得添加引号、正负号或空白。
-除明确标为可选的 DC 字段外，所有字段都是必填字段。重复字段和未在上表列出
+除明确标为可选的 `master`、`dc` 块及其可选字段外，所有字段都是必填字段。重复字段和未在上表列出
 的字段都会被拒绝，以避免歧义或拼写错误被静默忽略。
 
 ## Distributed Clocks
 
-DC 默认关闭。只有命令行指定 `--dc on` 时，主站才应用 YAML 中的 `dc`
-配置。启用后至少需要一个带 `dc` 块的从站，并且必须且只能有一个从站设置
+DC 默认关闭。设置 `master.dc: "on"` 或命令行 `--dc on` 后，主站才应用
+YAML 中从站的 `dc` 配置；命令行 `--dc off` 可以临时覆盖 YAML 中的启用设置。启用后至少需要一个带 `dc` 块的从站，并且必须且只能有一个从站设置
 `reference: true`。不带 `dc` 块的从站可以继续存在于同一总线上。
 
-SYNC0 周期固定由 `--period-us * 1000` 得到，YAML 不允许覆盖，从而避免主站
-周期和从站同步周期不一致。若换算结果超过 IgH `uint32_t` 纳秒范围，启动参数
-校验失败。
+SYNC0 周期固定由合并后的 `period_us * 1000` 得到（命令行 `--period-us`
+优先于 `master.period_us`），从站 `dc` 块不能单独指定 SYNC0 周期。
+启用 DC 时若换算结果超过 IgH `uint32_t` 纳秒范围，启动参数校验失败。
+CPU 可用性也在合并后校验；YAML 本身的非法值、重复或未知字段始终报错，
+不因命令行覆盖而忽略。
 
 以下仅展示格式；`assign_activate` 和相位值必须从目标设备厂商 XML/ESI 获取，
 不得直接把示例值用于真实设备：

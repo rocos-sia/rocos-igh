@@ -93,7 +93,7 @@ if(BUILD_TESTING)
 		endforeach()
 		add_test(NAME dc_timing COMMAND dc_timing_test)
 	endif()
-	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp)
+	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp src/runtime_options.cpp)
 	target_include_directories(pdo_config_test PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	)

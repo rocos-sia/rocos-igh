@@ -39,12 +39,46 @@ The executable is `rocos_igh_master` and supports:
 - `--config <PDO YAML path>` (required)
 - `--master-id <non-negative integer>`
 - `--period-us <integer >= 1000>`
-- `--cpu <non-negative logical CPU ID>`（可选，仅绑定周期线程；默认沿用启动时的亲和性）
+- `--cpu <non-negative logical CPU ID|auto>`（可选，仅绑定周期线程；`auto` 沿用启动时的亲和性）
 - `--preop-timeout-ms <1..4294967295>`：PREOP 等待超时，默认 10000 ms
 - `--op-timeout-ms <1..4294967295>`：OP 等待超时，默认 60000 ms
 - `--pdo-config-attempts <1..4294967295>`：每个从站 PREOP PDO 配置及读回验证的最大总尝试次数，默认 5（包含首次）
 - `--dc <on|off>` (default: `off`)
 - `--help`
+
+启动参数也可写入 [config/talon_pdo.yaml](config/talon_pdo.yaml) 顶层的可选 `master` 块：
+
+```yaml
+master:
+  master_id: 0
+  period_us: 1000
+  cpu: null
+  dc: "off"
+  preop_timeout_ms: 10000
+  op_timeout_ms: 60000
+  pdo_config_attempts: 5
+```
+
+优先级为 **命令行显式参数 > YAML `master` 字段 > 程序默认值**。
+`--config` 仍必须通过命令行指定，`--help` 不读取配置文件。
+省略 `master` 块或其中任意字段时使用程序默认值；旧 PDO 配置仍兼容。
+`cpu: null` 保留原有亲和性，数字表示绑定逻辑 CPU；`dc` 使用 `"on"` / `"off"`。
+配置只在启动时读取，临时命令行覆盖不会修改文件。例如：
+
+```bash
+# 全部使用 YAML 配置
+./build-master/rocos_igh_master --config config/talon_pdo.yaml
+
+# 只覆盖周期和 PDO 尝试次数，其余仍使用 YAML 配置
+./build-master/rocos_igh_master --config config/talon_pdo.yaml \
+    --period-us 2000 --pdo-config-attempts 8
+
+# 临时取消 YAML 中的 CPU 绑定，并关闭 DC
+./build-master/rocos_igh_master --config config/talon_pdo.yaml --cpu auto --dc off
+```
+
+YAML 中的未知字段、重复字段、非法类型或范围会报错；即便命令行覆盖该字段，
+也不会忽略非法 YAML。DC 与周期的组合约束、CPU 可用性按合并后的最终参数校验。
 
 PDO 配置失败时重做当前从站的完整写入和读回验证，已验证的从站不重复配置。
 所有从站及尝试仍共用 `--preop-timeout-ms` 的总预算（包括等待 PREOP），

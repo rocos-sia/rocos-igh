@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "runtime_options.hpp"
+
 namespace rocos {
 
 struct PdoEntryConfig {
@@ -37,6 +39,7 @@ struct SlavePdoConfig {
 
 struct PdoBusConfig {
     std::vector<SlavePdoConfig> slaves;
+    RuntimeOptions master; ///< Optional YAML startup defaults; CLI overrides these.
 };
 
 bool loadPdoConfig(const std::string &path,

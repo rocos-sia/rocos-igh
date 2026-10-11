@@ -30,11 +30,13 @@ struct RuntimeOptions {
  *
  * @param argc    Argument count.
  * @param argv    Argument vector.
- * @param options Receives the parsed values (reset first).
+ * @param options Receives defaults overlaid with explicitly supplied CLI values.
  * @param error   Receives a description of the first failure.
+ * @param defaults Base values, normally loaded from the YAML master block.
  * @return True on success.
  */
-bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error);
+bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error,
+                         const RuntimeOptions &defaults = RuntimeOptions{});
 
 /// @brief Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept;

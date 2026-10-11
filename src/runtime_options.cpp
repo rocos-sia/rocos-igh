@@ -31,10 +31,14 @@ bool parseUnsigned(std::string_view text, std::uint64_t &value) noexcept {
 
 // Parses runtime options strictly, rejecting unknown flags,
 // missing values, signs, and out-of-range integers without any EtherCAT side effect.
-bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error) {
+bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error,
+                         const RuntimeOptions &defaults) {
     error.clear();
-    options = RuntimeOptions{};
+    options = defaults;
+    options.config_path.clear();
+    options.show_help = false;
     bool config_seen = false;
+    bool cpu_seen = false;
     bool master_id_seen = false;
     bool period_us_seen = false;
     bool dc_seen = false;
@@ -92,6 +96,18 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
             continue;
         }
 
+        if (flag == "--cpu") {
+            if (cpu_seen) {
+                error = "duplicate option: --cpu";
+                return false;
+            }
+            cpu_seen = true;
+            if (value_text == "auto") {
+                options.cpu.reset();
+                continue;
+            }
+        }
+
         std::uint64_t parsed_value = 0;
         if (!parseUnsigned(value_text, parsed_value)) {
             error = "invalid value for option: " + std::string(flag);
@@ -113,10 +129,6 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
         }
 
         if (flag == "--cpu") {
-            if (options.cpu.has_value()) {
-                error = "duplicate option: --cpu";
-                return false;
-            }
             if (parsed_value > std::numeric_limits<unsigned int>::max()) {
                 error = "cpu is out of range";
                 return false;
@@ -186,7 +198,7 @@ bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::st
 
 // Returns the one-line usage string.
 const char *runtimeOptionsUsage() noexcept {
-    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--pdo-config-attempts <count>] [--help]\nCPU: non-negative logical CPU permitted by the kernel; explicit binding may expand inherited affinity (including isolated CPUs), subject to cpuset restrictions; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers. PDO configuration attempts per slave default: 5 (including the first attempt); must be positive.";
+    return "usage: rocos_igh_master --config <path> [--master-id <id>] [--period-us <period>] [--cpu <logical-cpu|auto>] [--dc <on|off>] [--preop-timeout-ms <ms>] [--op-timeout-ms <ms>] [--pdo-config-attempts <count>] [--help]\nConfiguration precedence: explicit CLI > YAML master block > built-in defaults.\nCPU: auto keeps inherited affinity; otherwise a non-negative logical CPU permitted by the kernel; explicit binding may expand inherited affinity (including isolated CPUs), subject to cpuset restrictions; default: keep inherited affinity.\nPREOP timeout default: 10000 ms; OP timeout default: 60000 ms; both must be positive integers. PDO configuration attempts per slave default: 5 (including the first attempt); must be positive.";
 }
 
 }  // namespace rocos
