@@ -103,22 +103,28 @@ sudo ./build/rocos_igh_master \
 | 参数 | 本次设置及含义 |
 |---|---|
 | `sudo` | 提供设备访问、实时调度和内存锁定所需权限；系统资源限制仍可能导致失败 |
-| `--config ./config/talon_pdo.yaml` | 必填，加载从站 PDO 和 DC 配置；路径相对于当前工作目录 |
-| `--dc on` | 启用 Distributed Clocks；YAML 必须提供相应 DC 配置且恰有一个参考从站 |
+| `--config ./config/talon_pdo.yaml` | 必填，加载主站参数、从站 PDO/DC 和可选初始化 SDO 配置；路径相对于当前工作目录 |
+| `--dc on` | 启用 Distributed Clocks；YAML 中必须恰有一个从站设置 `dc_ref: true`，其他从站为 false 或省略 |
 | `--op-timeout-ms 60000` | OP 启动阶段总预算为 60 秒，包含稳定确认和 PDO 异步读回验证 |
 | `--cpu 3` | 将周期线程绑定到逻辑 CPU 3；编号从 0 开始，不是“第 3 个物理核” |
 | `--master-id 0` | 本次省略，默认主站 0，对应 `ecm0`、`pd_input0`、`pd_output0` 等 IPC |
 | `--period-us 1000` | 本次省略，默认周期 1000 µs，即 1 ms；当前最小支持值为 1000 |
-| `--preop-timeout-ms 10000` | 本次省略，默认 PREOP 总预算为 10 秒，包含等待、配置和读回重试 |
+| `--preop-timeout-ms 10000` | 本次省略，默认 PREOP 总预算为 10 秒，包含等待、初始化 SDO、PDO 配置和读回重试 |
 
 两个超时参数分别作用于不同阶段，不是每个从站各自拥有完整超时；值必须为
 正整数。IgH 同步 SDO 调用不能被 PREOP 预算直接取消，返回后才检查是否超时。
 若日志表明 PREOP 阶段预算不足，应单独调整 `--preop-timeout-ms`；
 增加 OP 超时不能修复 PREOP 阶段的 SDO 失败。
 
+需要在 PREOP 配置额外字典时，填写各从站的 `init_commands`，格式见
+[PDO 配置规范](pdo-config.md#preop-sdo-初始化命令)。列表默认为空；命令成功仅确认
+SDO 下载应答，不要求初始化对象可读。命令失败立即终止启动，不随 PDO 重试重放；
+其耗时与 PDO 配置共用 PREOP 总预算，已完成的写入不会自动回滚。
+
 ## 5. 确认启动成功
 
-启动过程会等待 PREOP 稳定，逐站配置并读回 PDO，随后进入周期通信，
+启动过程会等待 PREOP 稳定，先按顺序写入各从站可选的 `init_commands`，
+全部成功后逐站配置并读回 PDO，随后进入周期通信，
 等待 OP、工作计数器和激活后的 PDO 读回验证通过。
 
 确认日志中出现 CPU 绑定结果：

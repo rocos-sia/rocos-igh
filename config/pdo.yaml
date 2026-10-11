@@ -3,12 +3,7 @@ version: 1
 slaves:
   - id: 0
     name: EtherCAT Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
-      reference: true
+    dc_ref: true
     rx_pdos:
       - index: 0x1600
         entries:

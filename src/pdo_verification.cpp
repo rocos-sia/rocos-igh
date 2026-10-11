@@ -25,6 +25,18 @@ bool PdoVerification::prepare(const StaticSlaveConfig &config,
                     std::to_string(slave.position) + "]";
             return false;
         }
+        if (slave.init_command_count != 0 && slave.init_commands == nullptr) {
+            error = "missing init_commands for slave[" + std::to_string(slave.position) + "]";
+            return false;
+        }
+        for (std::size_t i = 0; i < slave.init_command_count; ++i) {
+            const auto &command = slave.init_commands[i];
+            if (command.size != 1 && command.size != 2 && command.size != 4 && command.size != 8) {
+                error = "invalid init_commands size for slave[" + std::to_string(slave.position) + "]";
+                return false;
+            }
+            init_writes_.push_back({slave.position, command});
+        }
         const auto add = [&](std::uint8_t sm, std::uint16_t index, std::uint8_t sub,
                              std::uint8_t size, std::uint32_t value, Field field) {
             checks_.push_back({slave.position, sm, index, sub, size, value, field, s});
@@ -200,17 +212,39 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
     };
     const auto deadline = now() + std::int64_t{timeout_ms} * 1000000;
     if (result_ == Result::Failed) return report();
-    const auto guard = [&] {
+    const auto guard = [&](const Check &c) {
         ec_slave_info_t info{};
-        const auto &c = checks_[cursor_];
         const int rc = ecrt_master_get_slave(master, c.slave_position, &info);
         if (rc != 0 || info.al_state != EC_AL_STATE_PREOP || info.error_flag != 0) {
             fail(Failure::PreopState, rc, info.al_state, info.error_flag);
+            error_.check = c;
             return false;
         }
         if (now() >= deadline) fail(Failure::PreopTimeout);
+        if (result_ == Result::Failed) error_.check = c;
         return result_ != Result::Failed;
     };
+    // Complete the ordered initialization commands before any PDO writes.
+    // Do not replay arbitrary device commands when a later PDO attempt fails.
+    for (const auto &write : init_writes_) {
+        const auto &command = write.command;
+        const Check c{write.position, 0, command.index, command.sub_index,
+                      command.size, 0, Field::InitCommand, 0};
+        if (!guard(c)) return report();
+        std::uint32_t abort_code = 0;
+        const int rc = ecrt_master_sdo_download(master, c.slave_position, c.index,
+            c.subindex, command.data.data(), command.size, &abort_code);
+        if (!guard(c)) return report(); // Reject late results or loss of PREOP.
+        if (rc != 0) {
+            fail(Failure::Write, rc);
+            error_.check = c;
+            error_.abort_code = abort_code;
+            return report();
+        }
+        log << "PREOP init command written: slave[position=" << c.slave_position
+            << "] index=" << c.index << " sub_index=" << unsigned(c.subindex)
+            << " bytes=" << unsigned(c.size) << '\n';
+    }
     // Both assignments must be disabled before touching a PDO mapping. Restore
     // mapping counts before enabling assignments. Retry the whole slave so a
     // partial write can never be accepted as a complete configuration.
@@ -229,7 +263,7 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
                 for (cursor_ = begin; cursor_ < end; ++cursor_) {
                     const auto &c = checks_[cursor_];
                     if (c.field != phases[phase]) continue;
-                    if (!guard()) break;
+                    if (!guard(c)) break;
                     const auto value = phase < 2 ? 0U : c.expected;
                     std::uint8_t data[4]{};
                     for (std::size_t i = 0; i < c.size; ++i)
@@ -237,7 +271,7 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
                     std::uint32_t abort_code = 0;
                     const int rc = ecrt_master_sdo_download(master, c.slave_position,
                         c.index, c.subindex, data, c.size, &abort_code);
-                    if (!guard()) break; // Reject late results and state changes.
+                    if (!guard(c)) break; // Reject late results and state changes.
                     if (rc != 0) {
                         fail(Failure::Write, rc, value, c.size);
                         error_.abort_code = abort_code;
@@ -248,13 +282,13 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
             if (result_ == Result::Pending) {
                 for (cursor_ = begin; cursor_ < end; ++cursor_) {
                     const auto &c = checks_[cursor_];
-                    if (!guard()) break;
+                    if (!guard(c)) break;
                     std::uint8_t data[4]{};
                     std::size_t size = 0;
                     std::uint32_t abort_code = 0;
                     const int rc = ecrt_master_sdo_upload(master, c.slave_position,
                         c.index, c.subindex, data, sizeof(data), &size, &abort_code);
-                    if (!guard()) break;
+                    if (!guard(c)) break;
                     if (rc != 0) {
                         fail(Failure::Read, rc);
                         error_.abort_code = abort_code;
@@ -287,6 +321,7 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
 }
 
 void PdoVerification::reset() noexcept {
+    init_writes_.clear();
     checks_.clear();
     requests_.clear();
     cursor_ = 0;
@@ -303,17 +338,22 @@ void PdoVerification::printError(std::ostream &out) const {
     const auto flags = out.flags();
     const auto fill = out.fill();
     const auto &c = error_.check;
-    out << std::dec << "PDO verification failed at slave[position=" << c.slave_position << "] SM"
-        << unsigned(c.sync_index) << (c.sync_index == 2 ? " RxPDO" : " TxPDO")
-        << " object=0x" << std::hex << std::setfill('0') << std::setw(4) << c.index
+    const bool init_command = c.field == Field::InitCommand;
+    out << std::dec << (init_command ? "Init command failed at slave[position="
+                                     : "PDO verification failed at slave[position=")
+        << c.slave_position << "]";
+    if (!init_command)
+        out << " SM" << unsigned(c.sync_index) << (c.sync_index == 2 ? " RxPDO" : " TxPDO");
+    out << " object=0x" << std::hex << std::setfill('0') << std::setw(4) << c.index
         << ':' << std::setw(2) << unsigned(c.subindex) << std::dec << ' ';
     switch (c.field) {
     case Field::AssignmentCount: out << "assignment count"; break;
     case Field::Assignment: out << "assigned PDO/order"; break;
     case Field::MappingCount: out << "mapping entry count"; break;
     case Field::MappingEntry: out << "mapping entry/order"; break;
+    case Field::InitCommand: out << "init_commands bytes=" << unsigned(c.size); break;
     }
-    out << " expected=0x" << std::hex << c.expected << std::dec;
+    if (!init_command) out << " expected=0x" << std::hex << c.expected << std::dec;
     switch (error_.failure) {
     case Failure::Value:
         out << " actual=0x" << std::hex << error_.actual << std::dec;
@@ -338,7 +378,9 @@ void PdoVerification::printError(std::ostream &out) const {
     case Failure::BusUnhealthy: out << " verification invalidated by OP/link/WC loss"; break;
     case Failure::NotPrepared: out << " verification requests were not prepared"; break;
     case Failure::Write:
-        out << " SDO write failed attempted=0x" << std::hex << error_.actual << std::dec; break;
+        out << " SDO write failed";
+        if (!init_command) out << " attempted=0x" << std::hex << error_.actual << std::dec;
+        break;
     case Failure::PreopState:
         out << " PREOP state check failed: al_state=0x" << std::hex << error_.actual
             << std::dec << " error_flag=" << error_.actual_size; break;

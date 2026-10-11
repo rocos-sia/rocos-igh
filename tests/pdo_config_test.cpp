@@ -69,14 +69,7 @@ std::string replaceOnce(std::string source,
 }
 
 std::string validDcYaml() {
-    return replaceOnce(validYaml(), "    rx_pdos:\n", R"yaml(    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: -250000
-      sync1_cycle_ns: 2000000
-      sync1_shift_ns: 125000
-      reference: true
-    rx_pdos:
-)yaml");
+    return replaceOnce(validYaml(), "    rx_pdos:\n", "    dc_ref: true\n    rx_pdos:\n");
 }
 
 bool expectConfigError(const std::string &yaml, const std::string &error_fragment) {
@@ -87,6 +80,84 @@ bool expectConfigError(const std::string &yaml, const std::string &error_fragmen
     CHECK(config.slaves.empty());
     CHECK(error.find(file.path()) != std::string::npos);
     CHECK(error.find(error_fragment) != std::string::npos);
+    return true;
+}
+
+bool testInitCommands() {
+    struct Case { const char *type; const char *value; std::uint8_t size; std::uint64_t encoded; };
+    const Case cases[]{
+        {"uint8", "255", 1, 0xff}, {"int8", "-128", 1, 0x80}, {"int8", "127", 1, 0x7f},
+        {"uint16", "65535", 2, 0xffff}, {"int16", "-32768", 2, 0x8000},
+        {"int16", "32767", 2, 0x7fff}, {"uint32", "0x89ABCDEF", 4, 0x89abcdef},
+        {"int32", "-2147483648", 4, 0x80000000}, {"int32", "2147483647", 4, 0x7fffffff},
+        {"uint64", "18446744073709551615", 8, UINT64_MAX},
+        {"int64", "-9223372036854775808", 8, UINT64_C(0x8000000000000000)},
+        {"int64", "9223372036854775807", 8, UINT64_C(0x7fffffffffffffff)},
+        {"int16", "-2", 2, 0xfffe}, {"int32", "0X12345678", 4, 0x12345678},
+    };
+    for (const auto &c : cases) {
+        const auto command = "    init_commands:\n      - {name: Parameter, index: 0x2000, sub_index: 255, Type: " +
+                             std::string(c.type) + ", Value: " + c.value + "}\n";
+        const TemporaryYamlFile file(replaceOnce(validYaml(), "    rx_pdos:\n", command + "    rx_pdos:\n"));
+        rocos::PdoBusConfig config;
+        std::string error;
+        CHECK(rocos::loadPdoConfig(file.path(), config, error));
+        CHECK(config.slaves[0].init_commands.size() == 1);
+        const auto &cmd = config.slaves[0].init_commands[0];
+        CHECK(cmd.index == 0x2000 && cmd.sub_index == 255 && cmd.size == c.size);
+        for (unsigned int i = 0; i < c.size; ++i)
+            CHECK(cmd.data[i] == static_cast<std::uint8_t>(c.encoded >> (i * 8)));
+    }
+    const auto commands = R"yaml(    init_commands:
+      - {index: 0x2000, sub_index: 0, type: uint8, value: 1}
+      - {index: 0x2000, sub_index: 0, type: uint8, value: 2}
+    rx_pdos:
+)yaml";
+    rocos::PdoBusConfig config;
+    std::string error;
+    const TemporaryYamlFile ordered(replaceOnce(validYaml(), "    rx_pdos:\n", commands));
+    CHECK(rocos::loadPdoConfig(ordered.path(), config, error));
+    CHECK(config.slaves[0].init_commands.size() == 2);
+    CHECK(config.slaves[0].init_commands[0].data[0] == 1 && config.slaves[0].init_commands[1].data[0] == 2);
+    for (const auto &block : {"    rx_pdos:\n", "    init_commands: []\n    rx_pdos:\n"}) {
+        const TemporaryYamlFile empty(replaceOnce(validYaml(), "    rx_pdos:\n", block));
+        CHECK(rocos::loadPdoConfig(empty.path(), config, error));
+        CHECK(config.slaves[0].init_commands.empty());
+    }
+    return true;
+}
+
+bool testInvalidInitCommands() {
+    const std::string command = "    init_commands:\n      - {index: 0x2000, sub_index: 0, type: uint8, value: 1}\n    rx_pdos:\n";
+    const auto yaml = replaceOnce(validYaml(), "    rx_pdos:\n", command);
+    for (const auto &type : {"uint7", "int24", "float32", "bool", "[]", "null"})
+        CHECK(expectConfigError(replaceOnce(yaml, "type: uint8", std::string("type: ") + type), "init_commands[0].type"));
+    for (const auto &value : {"256", "-1", "1.5", "true", "null", "[]", "{}", "\"1\"", "18446744073709551616"})
+        CHECK(expectConfigError(replaceOnce(yaml, "value: 1", std::string("value: ") + value), "init_commands[0].value"));
+    for (const auto &type : {"int8", "int16", "int32", "int64"}) {
+        const auto signed_yaml = replaceOnce(yaml, "type: uint8", std::string("type: ") + type);
+        CHECK(expectConfigError(replaceOnce(signed_yaml, "value: 1", "value: 9223372036854775808"), "init_commands[0].value"));
+        CHECK(expectConfigError(replaceOnce(signed_yaml, "value: 1", "value: -9223372036854775809"), "init_commands[0].value"));
+    }
+    for (const auto &c : std::vector<std::pair<std::string,std::string>>{
+             {"int8", "128"}, {"int8", "-129"}, {"int16", "32768"}, {"int16", "-32769"},
+             {"int32", "2147483648"}, {"int32", "-2147483649"},
+             {"uint16", "65536"}, {"uint32", "4294967296"}, {"int8", "0xff"}}) {
+        CHECK(expectConfigError(replaceOnce(replaceOnce(yaml, "type: uint8", "type: " + c.first),
+                                            "value: 1", "value: " + c.second), "init_commands[0].value"));
+    }
+    CHECK(expectConfigError(replaceOnce(yaml, "type: uint8", "type: int8, Type: int8"), "duplicated"));
+    CHECK(expectConfigError(replaceOnce(yaml, "value: 1", "value: 1, Value: 1"), "duplicated"));
+    CHECK(expectConfigError(replaceOnce(yaml, "value: 1", "value: 1, value: 2"), "duplicated"));
+    CHECK(expectConfigError(replaceOnce(yaml, "index: 0x2000", "index: 65536"), "init_commands[0].index"));
+    CHECK(expectConfigError(replaceOnce(yaml, "sub_index: 0", "sub_index: 256"), "init_commands[0].sub_index"));
+    for (const auto &field : {"index: 0x2000, ", "sub_index: 0, ", "type: uint8, ", ", value: 1"})
+        CHECK(expectConfigError(replaceOnce(yaml, field, ""), "is required"));
+    CHECK(expectConfigError(replaceOnce(yaml, "value: 1", "value: 1, bit_length: 8"), "is not allowed"));
+    for (const auto &block : {"null", "{}", "true", "[1]"}) {
+        CHECK(expectConfigError(replaceOnce(validYaml(), "    rx_pdos:\n",
+            "    init_commands: " + std::string(block) + "\n    rx_pdos:\n"), "init_commands"));
+    }
     return true;
 }
 
@@ -250,90 +321,44 @@ slaves:
 }
 
 bool testLoadsDistributedClockConfig() {
-  const TemporaryYamlFile file(validDcYaml());
-  rocos::PdoBusConfig config;
-  std::string error;
-  CHECK(rocos::loadPdoConfig(file.path(), config, error));
-  CHECK(error.empty());
-  CHECK(config.slaves.size() == 1U);
-  CHECK(config.slaves[0].dc.has_value());
-  CHECK(config.slaves[0].dc->assign_activate == 0x0300U);
-  CHECK(config.slaves[0].dc->sync0_shift_ns == -250000);
-  CHECK(config.slaves[0].dc->sync1_cycle_ns == 2000000U);
-  CHECK(config.slaves[0].dc->sync1_shift_ns == 125000);
-  CHECK(config.slaves[0].dc->reference);
-
-  const TemporaryYamlFile defaults_file(replaceOnce(
-    validDcYaml(),
-    "      sync0_shift_ns: -250000\n      sync1_cycle_ns: 2000000\n"
-    "      sync1_shift_ns: 125000\n      reference: true\n",
-    ""));
-  CHECK(rocos::loadPdoConfig(defaults_file.path(), config, error));
-  CHECK(config.slaves[0].dc.has_value());
-  CHECK(config.slaves[0].dc->sync0_shift_ns == 0);
-  CHECK(config.slaves[0].dc->sync1_cycle_ns == 0U);
-  CHECK(config.slaves[0].dc->sync1_shift_ns == 0);
-  CHECK(!config.slaves[0].dc->reference);
-  return true;
+    rocos::PdoBusConfig config;
+    std::string error;
+    for (const std::string &field : {"    dc_ref: true\n", "    dc_ref: false\n", ""}) {
+        const TemporaryYamlFile file(replaceOnce(validYaml(), "    rx_pdos:\n", field + "    rx_pdos:\n"));
+        CHECK(rocos::loadPdoConfig(file.path(), config, error));
+        CHECK(config.slaves.size() == 1 && config.slaves[0].dc.has_value());
+        const auto &dc = *config.slaves[0].dc;
+        CHECK(dc.assign_activate == 0x0300U && dc.sync0_shift_ns == 0);
+        CHECK(dc.sync1_cycle_ns == 0 && dc.sync1_shift_ns == 0);
+        CHECK(dc.reference == (field == "    dc_ref: true\n"));
+    }
+    // A non-first reference is valid; omitted dc_ref still supplies DC defaults.
+    const auto second = validDcYaml().substr(validDcYaml().find("  - id:"));
+    const TemporaryYamlFile multi(validYaml() + replaceOnce(second, "id: 0", "id: 1"));
+    CHECK(rocos::loadPdoConfig(multi.path(), config, error));
+    CHECK(config.slaves.size() == 2);
+    CHECK(config.slaves[0].dc.has_value() && !config.slaves[0].dc->reference);
+    CHECK(config.slaves[1].dc.has_value() && config.slaves[1].dc->reference);
+    return true;
 }
 
 bool testRejectsInvalidDistributedClockConfig() {
-  std::vector<std::pair<std::string, std::string>> cases;
-  cases.emplace_back(replaceOnce(validDcYaml(), "      assign_activate: 0x0300\n", ""),
-             "dc.assign_activate is required");
-  cases.emplace_back(replaceOnce(validDcYaml(), "assign_activate: 0x0300", "assign_activate: 0"),
-             "dc.assign_activate must be non-zero");
-  cases.emplace_back(replaceOnce(validDcYaml(), "assign_activate: 0x0300", "assign_activate: 65536"),
-             "dc.assign_activate is out of range");
-  cases.emplace_back(replaceOnce(validDcYaml(), "sync0_shift_ns: -250000", "sync0_shift_ns: 2147483648"),
-             "dc.sync0_shift_ns is out of range");
-  cases.emplace_back(replaceOnce(validDcYaml(), "sync1_cycle_ns: 2000000", "sync1_cycle_ns: 4294967296"),
-             "dc.sync1_cycle_ns is out of range");
-  cases.emplace_back(replaceOnce(validDcYaml(), "reference: true", "reference: yes"),
-             "dc.reference must be a boolean");
-  cases.emplace_back(replaceOnce(validDcYaml(), "reference: true", "reference: \"true\""),
-             "dc.reference must be a boolean");
-  cases.emplace_back(replaceOnce(validDcYaml(), "      reference: true\n", "      reference: true\n      typo: 1\n"),
-             "dc.typo is not allowed");
-
-  for (const auto &test_case : cases) {
-    CHECK(expectConfigError(test_case.first, test_case.second));
-  }
-
-  const TemporaryYamlFile duplicate_reference_file(R"yaml(version: 1
-slaves:
-  - id: 0
-    name: First
-    dc:
-      assign_activate: 0x0300
-      reference: true
-    rx_pdos:
-      - index: 0x1600
-        entries:
-          - {name: Control, index: 0x6040, sub_index: 0, bit_length: 16}
-    tx_pdos:
-      - index: 0x1A00
-        entries:
-          - {name: Status, index: 0x6041, sub_index: 0, bit_length: 16}
-  - id: 1
-    name: Second
-    dc:
-      assign_activate: 0x0300
-      reference: true
-    rx_pdos:
-      - index: 0x1600
-        entries:
-          - {name: Control, index: 0x6040, sub_index: 0, bit_length: 16}
-    tx_pdos:
-      - index: 0x1A00
-        entries:
-          - {name: Status, index: 0x6041, sub_index: 0, bit_length: 16}
-)yaml");
-  rocos::PdoBusConfig config;
-  std::string error;
-  CHECK(!rocos::loadPdoConfig(duplicate_reference_file.path(), config, error));
-  CHECK(error.find("only one DC reference") != std::string::npos);
-  return true;
+    for (const std::string &value : {"yes", "on", "1", "\"true\"", "null", "[]", "{}"}) {
+        CHECK(expectConfigError(replaceOnce(validDcYaml(), "dc_ref: true", "dc_ref: " + value),
+                                "dc_ref must be a boolean"));
+    }
+    CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc_ref: true\n",
+          "    dc_ref: true\n    dc_ref: false\n"), "dc_ref is duplicated"));
+    // Removed settings must not be silently accepted and ignored.
+    for (const std::string &field : {"dc: {assign_activate: 0x0300, reference: true}",
+             "assign_activate: 0x0300", "sync0_shift_ns: 0", "sync1_cycle_ns: 0", "sync1_shift_ns: 0"}) {
+        CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc_ref: true\n",
+                                            "    " + field + "\n"), "is not allowed"));
+    }
+    const auto second = validDcYaml().substr(validDcYaml().find("  - id:"));
+    CHECK(expectConfigError(validDcYaml() + replaceOnce(second, "id: 0", "id: 1"),
+                            "only one DC reference"));
+    return true;
 }
 
   bool testRejectsInvalidConfigFields() {
@@ -423,12 +448,21 @@ slaves:
     CHECK(config.slaves[0].dc->reference);
     CHECK(config.slaves[0].rx_pdos[0].entries.size() == 7U);
     CHECK(config.slaves[0].tx_pdos[0].entries.size() == 5U);
+    for (const std::string &name : {"talon_pdo.yaml", "ZeroErr6.yaml"}) {
+        CHECK(rocos::loadPdoConfig(std::string(ROCOS_IGH_SOURCE_DIR) + "/config/" + name, config, error));
+        CHECK(config.slaves.size() == 7);
+        for (std::size_t i = 0; i < config.slaves.size(); ++i) {
+            CHECK(config.slaves[i].dc.has_value());
+            CHECK(config.slaves[i].dc->reference == (i == 0));
+        }
+    }
     return true;
   }
 
 }  // namespace
 
 int main() {
+  if (!testInitCommands() || !testInvalidInitCommands()) return 1;
   if (!testMasterOptions() || !testInvalidMasterOptions()) return 1;
   if (!testLoadsValidMultiSlaveConfig()) {
     return 1;

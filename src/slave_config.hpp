@@ -54,6 +54,8 @@ struct SlaveSpec {
     PdoEntrySpec *entries;       ///< PDO entry descriptors (mutable offsets).
     std::size_t entry_count;     ///< Number of entries in `entries`.
     std::optional<DistributedClockConfig> dc; ///< Optional device-specific DC settings.
+    const InitCommandConfig *init_commands{nullptr}; ///< Initialization-only SDO downloads.
+    std::size_t init_command_count{0};
 };
 
 /**

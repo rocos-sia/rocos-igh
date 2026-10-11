@@ -55,7 +55,42 @@ struct EthercatMasterTestPeer {
 };
 }
 #define CHECK(x) do { if (!(x)) { std::cerr << __LINE__ << ": " #x "\n"; return 1; } } while (false)
+int testYamlDcReference() {
+    rocos::PdoBusConfig source;
+    std::string error;
+    rocos::LoadedSlaveConfig loaded;
+    rocos::DistributedClockRuntimeConfig runtime;
+    CHECK(rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/talon_pdo.yaml", source, error));
+    CHECK(source.slaves.size() > 1);
+    CHECK(loaded.build(source, error));
+    for (std::size_t i = 0; i < loaded.view().slave_count; ++i) {
+        const auto &dc = loaded.view().slaves[i].dc;
+        CHECK(dc.has_value()); // Non-reference slaves also get synchronized.
+        CHECK(dc->assign_activate == 0x0300 && dc->sync0_shift_ns == 0);
+        CHECK(dc->sync1_cycle_ns == 0 && dc->sync1_shift_ns == 0);
+        CHECK(dc->reference == (i == 0));
+    }
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 2000, runtime, error));
+    CHECK(runtime.enabled && runtime.sync0_cycle_ns == 2000000 && runtime.reference_slave_index == 0);
+    source.slaves[0].dc->reference = false;
+    CHECK(loaded.build(source, error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
+    CHECK(error.find("no reference") != std::string::npos);
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), false, 1000, runtime, error));
+    CHECK(!runtime.enabled);
+    source.slaves.back().dc->reference = true;
+    CHECK(loaded.build(source, error));
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
+    CHECK(runtime.reference_slave_index == source.slaves.size() - 1);
+    source.slaves[0].dc->reference = true;
+    CHECK(loaded.build(source, error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
+    CHECK(error.find("multiple DC reference") != std::string::npos);
+    return 0;
+}
+
 int main() {
+    if (testYamlDcReference() != 0) return 1;
     rocos::EthercatMaster master;
     rocos::EthercatMasterTestPeer::seed(master, true);
     CHECK(master.setApplicationTime(12000000000ULL));

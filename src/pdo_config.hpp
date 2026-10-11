@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -29,12 +30,21 @@ struct DistributedClockConfig {
     bool reference{false};
 };
 
+// A validated scalar SDO download, encoded in EtherCAT little-endian wire order.
+struct InitCommandConfig {
+    std::uint16_t index{0};
+    std::uint8_t sub_index{0};
+    std::uint8_t size{0};
+    std::array<std::uint8_t, 8> data{};
+};
+
 struct SlavePdoConfig {
     std::uint16_t id{0};
     std::string name;
     std::vector<PdoMappingConfig> rx_pdos;
     std::vector<PdoMappingConfig> tx_pdos;
     std::optional<DistributedClockConfig> dc;
+    std::vector<InitCommandConfig> init_commands;
 };
 
 struct PdoBusConfig {

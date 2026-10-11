@@ -81,7 +81,7 @@ YAML 中的未知字段、重复字段、非法类型或范围会报错；即便
 也不会忽略非法 YAML。DC 与周期的组合约束、CPU 可用性按合并后的最终参数校验。
 
 PDO 配置失败时重做当前从站的完整写入和读回验证，已验证的从站不重复配置。
-所有从站及尝试仍共用 `--preop-timeout-ms` 的总预算（包括等待 PREOP），
+所有从站及尝试仍共用 `--preop-timeout-ms` 的总预算（包括等待 PREOP 和初始化 SDO），
 增加尝试次数不会自动延长超时；必要时同时调大该超时。
 例如 `--pdo-config-attempts 8 --preop-timeout-ms 30000`。
 PREOP 状态丢失或超时立即退出，激活后的 OP/PDO 再验证流程保持不变。
@@ -173,9 +173,10 @@ DOWN；若被网络管理器重新拉起，需要将这些 EoE 接口设为不�
 需要恢复 EoE/IP 访问时，在主站应用停止后使用
 `sudo ip link set dev <interface> up` 恢复对应接口。
 
-Distributed Clocks remain disabled unless explicitly enabled. Enabling DC also
-requires device-specific `dc` blocks in the YAML configuration, including
-exactly one reference slave:
+Distributed Clocks remain disabled unless explicitly enabled. When enabled,
+all YAML slaves use the built-in SYNC0 settings (AssignActivate 0x0300, zero shifts,
+SYNC1 disabled); exactly one slave must have `dc_ref: true`. Other slaves may set
+`dc_ref: false` or omit it and still participate in synchronization:
 
 ```bash
 sudo bash scripts/disable-eoe.sh --master-id 0 && \
@@ -208,9 +209,17 @@ identity to IgH for strict matching.
 
 启动时先逐个查询配置中的从站，等待全部处于无错误的 PREOP，连续确认 5 次后才进行 PDO/DC 等配置（轮询间隔 10 ms，默认超时 5000 ms，可用 `--preop-timeout-ms` 配置）。激活成功仅表示配置已提交，不表示从站已经进入 OP。
 
-激活前按从站顺序通过 SDO 实际写入并读回 PDO 字典，当前从站全部验证通过后才处理下一个从站：先清零 SM2/SM3 的分配数量（`0x1c12:0`、`0x1c13:0`），清零各 PDO 的映射数量，写映射条目并恢复映射数量，再写 PDO 分配条目、恢复分配数量。随后逐项核对两个方向的分配数量、PDO 索引及顺序、映射数量、条目的索引/子索引/位宽及顺序，长度也必须一致。写入、读回或比较失败时，重新执行该从站的完整配置与读回，**默认总共最多尝试 5 次，可通过 `--pdo-config-attempts` 设置**；失败日志包含从站物理位置、对象/子索引、差异或 SDO 返回码/abort code。达到尝试上限仍失败则不激活主站。要求设备支持这些对象的独立子索引读写，不跳过只读或不支持的对象。
+激活前先按从站顺序执行各自可选的 `init_commands`，全部成功后再按从站顺序通过 SDO 实际写入并读回 PDO 字典，当前从站全部验证通过后才处理下一个从站：先清零 SM2/SM3 的分配数量（`0x1c12:0`、`0x1c13:0`），清零各 PDO 的映射数量，写映射条目并恢复映射数量，再写 PDO 分配条目、恢复分配数量。随后逐项核对两个方向的分配数量、PDO 索引及顺序、映射数量、条目的索引/子索引/位宽及顺序，长度也必须一致。写入、读回或比较失败时，重新执行该从站的完整配置与读回，**默认总共最多尝试 5 次，可通过 `--pdo-config-attempts` 设置**；失败日志包含从站物理位置、对象/子索引、差异或 SDO 返回码/abort code。达到尝试上限仍失败则不激活主站。要求设备支持这些对象的独立子索引读写，不跳过只读或不支持的对象。
 
-每次 SDO 调用前后检查从站仍处于无错误 PREOP；状态查询失败、离开 PREOP 或耗尽总时限时立即终止，不继续重写。这里使用 IgH 阻塞式 SDO 接口，仅在初始化阶段执行，不进入实时周期线程。`--preop-timeout-ms` 的总预算涵盖 PREOP 稳定等待、配置与所有从站的读回/重试；**IgH 同步 ioctl 内的等待由 IgH 控制，应用不能取消正在执行的调用**，调用返回后才判定超时并拒绝其结果，因此不是可抢占的硬截止时间。
+`init_commands` 条目包含 `index`、`sub_index`、`Type` 和 `Value`，例如
+`{index: 0x2000, sub_index: 0, Type: uint32, Value: 1000}`（仅格式示例）。
+支持有符号/无符号 8、16、32、64 位整数，按小端编码；也支持小写 `type`/`value`。
+初始化命令按列表顺序执行，只确认 SDO 下载成功应答，不要求对象可读；任何失败立即停止启动。
+为避免重复触发设备动作，不随 PDO 重试重放初始化命令。详见
+[PREOP SDO 初始化命令](docs/pdo-config.md#preop-sdo-初始化命令)。
+`talon_pdo.yaml` 各从站预留空列表，填入实际设备所需字典后生效。
+
+每次 SDO 调用前后检查从站仍处于无错误 PREOP；状态查询失败、离开 PREOP 或耗尽总时限时立即终止，不继续重写。这里使用 IgH 阻塞式 SDO 接口，仅在初始化阶段执行，不进入实时周期线程。`--preop-timeout-ms` 的总预算涵盖 PREOP 稳定等待、初始化 SDO、PDO 配置与所有从站的读回/重试；**IgH 同步 ioctl 内的等待由 IgH 控制，应用不能取消正在执行的调用**，调用返回后才判定超时并拒绝其结果，因此不是可抢占的硬截止时间。
 
 IgH 激活时仍可能再次写入 PDO 配置，PREOP 验证通过不代表业务就绪；保留以下激活后的独立异步读回门禁，防止激活阶段的重写异常被放行。
 

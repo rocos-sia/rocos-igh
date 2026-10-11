@@ -21,12 +21,12 @@ master:
   cpu: null
 
   # 可选，默认 off。仅接受小写 on / off；dc: off 和 dc: "off" 均可。
-  # on 启用下方 slaves[].dc 配置，要求至少一个从站配置 DC，且恰有一个 reference: true。
-  # off 不应用从站 DC 配置。命令行覆盖：--dc <on|off>
+  # on 为全部从站启用 DC，要求恰有一个从站 dc_ref: true；其他从站可为 false 或省略。
+  # off 不启用 DC。命令行覆盖：--dc <on|off>
   dc: "off"
 
   # 可选，默认 10000。PREOP 阶段总超时，单位 ms；范围 1..4294967295。
-  # 等待 PREOP、全部从站 PDO 写入、读回和重试共用此预算，不按从站或尝试重新计时。
+  # 等待 PREOP、全部从站 init_commands、PDO 写入、读回和重试共用此预算，不按从站或尝试重新计时。
   # 已发出的阻塞 SDO 调用无法用此预算中断，返回后检查是否超时。
   # 命令行覆盖：--preop-timeout-ms <ms>
   preop_timeout_ms: 10000
@@ -42,15 +42,18 @@ master:
   # 命令行覆盖：--pdo-config-attempts <count>
   pdo_config_attempts: 5
 
+# init_commands 条目参考下方格式（仅格式示例，实际索引、类型和值须按设备字典确认）：
+# init_commands:
+#   - {name: Parameter, index: 0x2000, sub_index: 0, Type: uint32, Value: 1000}
+# Type 支持 int8/uint8/int16/uint16/int32/uint32/int64/uint64，自动确定 1/2/4/8 字节。
+# 有符号负值用十进制；非负值可用十进制或 0x 十六进制；Value 不加引号。
+# 各从站的命令按列表顺序写入，全部命令完成后再配置并读回所有 PDO。
+# 初始化命令失败即停止启动，不随 PDO 重试重复执行；Type/Value 也可写作 type/value。
 slaves:
   - id: 0
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
-      reference: true
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: true              # DC 参考时钟；启用 master.dc 时必须且只能有一个 true
     rx_pdos:
       - index: 0x1607
         entries:
@@ -71,11 +74,8 @@ slaves:
 
   - id: 1
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:
@@ -96,11 +96,8 @@ slaves:
 
   - id: 2
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:
@@ -121,11 +118,8 @@ slaves:
 
   - id: 3
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:
@@ -146,11 +140,8 @@ slaves:
 
   - id: 4
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:
@@ -171,11 +162,8 @@ slaves:
 
   - id: 5
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:
@@ -196,11 +184,8 @@ slaves:
 
   - id: 6
     name: Elmo Twitter Drive
-    dc:
-      assign_activate: 0x0300
-      sync0_shift_ns: 0
-      sync1_cycle_ns: 0
-      sync1_shift_ns: 0
+    init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
+    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
     rx_pdos:
       - index: 0x1607
         entries:

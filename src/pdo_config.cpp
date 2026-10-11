@@ -142,6 +142,71 @@ bool parseBoolean(const YAML::Node &node, const std::string &path) {
     throw std::runtime_error(path + " must be a boolean");
 }
 
+std::vector<InitCommandConfig> parseInitCommands(const YAML::Node &node,
+                                                const std::string &path) {
+    if (!node.IsSequence()) {
+        throw std::runtime_error(path + " must be a sequence");
+    }
+    std::vector<InitCommandConfig> commands;
+    commands.reserve(node.size());
+    for (std::size_t i = 0; i < node.size(); ++i) {
+        const auto entry = node[i];
+        const auto entry_path = path + "[" + std::to_string(i) + "]";
+        if (!entry.IsMap()) throw std::runtime_error(entry_path + " must be a mapping");
+        rejectUnknownKeys(entry, {"name", "index", "sub_index", "type", "value", "Type", "Value"},
+                          entry_path);
+        // Accept Type/Value as requested, alongside the existing lowercase style.
+        const auto field = [&](const char *lower, const char *upper) {
+            if (entry[lower] && entry[upper]) {
+                throw std::runtime_error(entry_path + "." + lower + " is duplicated by " + upper);
+            }
+            return entry[upper] ? entry[upper] : requireNode(entry, lower, entry_path);
+        };
+        if (entry["name"]) parseString(entry["name"], entry_path + ".name", MAX_PD_NAME_LEN - 1U);
+        InitCommandConfig command;
+        command.index = static_cast<std::uint16_t>(parseUnsigned(
+            requireNode(entry, "index", entry_path), entry_path + ".index", 0xffff));
+        command.sub_index = static_cast<std::uint8_t>(parseUnsigned(
+            requireNode(entry, "sub_index", entry_path), entry_path + ".sub_index", 0xff));
+        const auto type = parseString(field("type", "Type"), entry_path + ".type", 16);
+        bool is_signed = false;
+        unsigned int bits = 0;
+        for (unsigned int width : {8U, 16U, 32U, 64U}) {
+            if (type == "int" + std::to_string(width)) { bits = width; is_signed = true; }
+            if (type == "uint" + std::to_string(width)) bits = width;
+        }
+        if (bits == 0) {
+            throw std::runtime_error(entry_path + ".type must be int8/uint8/int16/uint16/int32/uint32/int64/uint64");
+        }
+        const auto value = field("value", "Value");
+        const auto value_path = entry_path + ".value";
+        std::uint64_t encoded = 0;
+        if (is_signed) {
+            const auto minimum = bits == 64 ? std::numeric_limits<std::int64_t>::min()
+                                           : -(std::int64_t{1} << (bits - 1));
+            const auto maximum = bits == 64 ? std::numeric_limits<std::int64_t>::max()
+                                           : (std::int64_t{1} << (bits - 1)) - 1;
+            // Positive hexadecimal values are accepted only within the signed range.
+            if (value.IsScalar() && value.Scalar().rfind("0x", 0) == 0) {
+                encoded = parseUnsigned(value, value_path, static_cast<std::uint64_t>(maximum));
+            } else if (value.IsScalar() && value.Scalar().rfind("0X", 0) == 0) {
+                encoded = parseUnsigned(value, value_path, static_cast<std::uint64_t>(maximum));
+            } else {
+                encoded = static_cast<std::uint64_t>(parseSigned(value, value_path, minimum, maximum));
+            }
+        } else {
+            const auto maximum = bits == 64 ? std::numeric_limits<std::uint64_t>::max()
+                                           : (std::uint64_t{1} << bits) - 1;
+            encoded = parseUnsigned(value, value_path, maximum);
+        }
+        command.size = static_cast<std::uint8_t>(bits / 8);
+        for (std::size_t b = 0; b < command.size; ++b)
+            command.data[b] = static_cast<std::uint8_t>(encoded >> (b * 8));
+        commands.push_back(command);
+    }
+    return commands;
+}
+
 RuntimeOptions parseMasterOptions(const YAML::Node &node) {
     if (!node.IsMap()) {
         throw std::runtime_error("master must be a mapping");
@@ -179,46 +244,6 @@ RuntimeOptions parseMasterOptions(const YAML::Node &node) {
     }
     // Cross-field DC/period validation runs after the CLI overrides are merged.
     return options;
-}
-
-DistributedClockConfig parseDistributedClock(const YAML::Node &node,
-                                              const std::string &path) {
-    if (!node.IsMap()) {
-        throw std::runtime_error(path + " must be a mapping");
-    }
-    rejectUnknownKeys(node,
-                      {"assign_activate", "sync0_shift_ns", "sync1_cycle_ns",
-                       "sync1_shift_ns", "reference"},
-                      path);
-
-    DistributedClockConfig dc;
-    dc.assign_activate = static_cast<std::uint16_t>(parseUnsigned(
-        requireNode(node, "assign_activate", path), path + ".assign_activate",
-        std::numeric_limits<std::uint16_t>::max()));
-    if (dc.assign_activate == 0U) {
-        throw std::runtime_error(path + ".assign_activate must be non-zero");
-    }
-    if (node["sync0_shift_ns"]) {
-        dc.sync0_shift_ns = static_cast<std::int32_t>(parseSigned(
-            node["sync0_shift_ns"], path + ".sync0_shift_ns",
-            std::numeric_limits<std::int32_t>::min(),
-            std::numeric_limits<std::int32_t>::max()));
-    }
-    if (node["sync1_cycle_ns"]) {
-        dc.sync1_cycle_ns = static_cast<std::uint32_t>(parseUnsigned(
-            node["sync1_cycle_ns"], path + ".sync1_cycle_ns",
-            std::numeric_limits<std::uint32_t>::max()));
-    }
-    if (node["sync1_shift_ns"]) {
-        dc.sync1_shift_ns = static_cast<std::int32_t>(parseSigned(
-            node["sync1_shift_ns"], path + ".sync1_shift_ns",
-            std::numeric_limits<std::int32_t>::min(),
-            std::numeric_limits<std::int32_t>::max()));
-    }
-    if (node["reference"]) {
-        dc.reference = parseBoolean(node["reference"], path + ".reference");
-    }
-    return dc;
 }
 
 std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
@@ -318,7 +343,7 @@ bool loadPdoConfig(const std::string &path,
             if (!slave_node.IsMap()) {
                 throw std::runtime_error(slave_path + " must be a mapping");
             }
-            rejectUnknownKeys(slave_node, {"id", "name", "dc", "rx_pdos", "tx_pdos"},
+            rejectUnknownKeys(slave_node, {"id", "name", "dc_ref", "rx_pdos", "tx_pdos", "init_commands"},
                               slave_path);
 
             SlavePdoConfig slave;
@@ -330,8 +355,15 @@ bool loadPdoConfig(const std::string &path,
             }
             slave.name = parseString(requireNode(slave_node, "name", slave_path),
                                      slave_path + ".name", MAX_SLAVE_NAME_LEN - 1U);
-            if (slave_node["dc"]) {
-                slave.dc = parseDistributedClock(slave_node["dc"], slave_path + ".dc");
+            // All YAML slaves use the same SYNC0 mode. dc_ref only selects the
+            // reference clock; false/absent does not disable synchronization.
+            slave.dc = DistributedClockConfig{0x0300U, 0, 0U, 0, false};
+            if (slave_node["dc_ref"]) {
+                slave.dc->reference = parseBoolean(slave_node["dc_ref"], slave_path + ".dc_ref");
+            }
+            if (slave_node["init_commands"]) {
+                slave.init_commands = parseInitCommands(slave_node["init_commands"],
+                                                       slave_path + ".init_commands");
             }
             slave.rx_pdos = parsePdos(requireNode(slave_node, "rx_pdos", slave_path),
                                       slave_path + ".rx_pdos");

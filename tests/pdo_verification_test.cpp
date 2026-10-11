@@ -30,7 +30,7 @@ void operator delete(void *p, std::size_t) noexcept { std::free(p); }
 namespace {
 using V = rocos::PdoVerification;
 using Key = std::tuple<unsigned int, unsigned int, unsigned int>;
-struct Value { std::uint32_t value; std::size_t size; };
+struct Value { std::uint64_t value; std::size_t size; };
 struct Request {
     unsigned int slave{0}, index{0}, sub{0};
     bool busy{false};
@@ -62,7 +62,7 @@ int preop_fault = 0, faults_left = 0;
 Key fault_key{0,0x1c12,0};
 bool lose_preop = false, slave_error_flag = false, state_query_error = false;
 std::int64_t transfer_delay_ns = 0;
-std::vector<std::tuple<Key, std::uint32_t, std::size_t>> writes;
+std::vector<std::tuple<Key, std::uint64_t, std::size_t>> writes;
 std::vector<Key> uploaded;
 unsigned int fakeSlave(std::uint16_t position) {
     if (position != 0 && position != 7) invariant_failed = true;
@@ -200,8 +200,8 @@ extern "C" int __wrap_ecrt_master_sdo_download(ec_master_t *, std::uint16_t posi
     if (slave == 1 && second_slave_ops == 0) first_slave_reads_at_second_write = uploads;
     if (slave == 1) ++second_slave_ops;
     now_ns += transfer_delay_ns;
-    std::uint32_t value = 0;
-    for (std::size_t i = 0; i < size; ++i) value |= std::uint32_t{data[i]} << (8*i);
+    std::uint64_t value = 0;
+    for (std::size_t i = 0; i < size; ++i) value |= std::uint64_t{data[i]} << (8*i);
     const Key key{slave,index,sub};
     writes.emplace_back(key, value, size);
     if (preop_fault == 1 && key == fault_key && faults_left-- > 0) {
@@ -210,11 +210,11 @@ extern "C" int __wrap_ecrt_master_sdo_download(ec_master_t *, std::uint16_t posi
     }
     // Mapping writes are illegal until BOTH assignment counts are zero;
     // entries must only be written while the mapping count is also zero.
-    if (index != 0x1c12 && index != 0x1c13) {
+    if (index >= 0x1600 && index <= 0x1bff) {
         if (dictionary[{slave,0x1c12,0}].value != 0 ||
             dictionary[{slave,0x1c13,0}].value != 0 ||
             (sub != 0 && dictionary[{slave,index,0}].value != 0)) invariant_failed = true;
-    } else if (sub != 0 && dictionary[{slave,index,0}].value != 0) {
+    } else if ((index == 0x1c12 || index == 0x1c13) && sub != 0 && dictionary[{slave,index,0}].value != 0) {
         invariant_failed = true;
     }
     dictionary[key] = {value,size};
@@ -439,7 +439,7 @@ bool preopTests() {
     }
     // Explicit wire-order oracle for slave 0: counts off, maps, counts on,
     // assignment entries, assignment counts on; then, and only then, slave 7.
-    const std::vector<std::tuple<Key,std::uint32_t,std::size_t>> expected{
+    const std::vector<std::tuple<Key,std::uint64_t,std::size_t>> expected{
         {{0,0x1c12,0},0,1}, {{0,0x1c13,0},0,1},
         {{0,0x1600,0},0,1}, {{0,0x1601,0},0,1}, {{0,0x1a07,0},0,1},
         {{0,0x1600,1},0x60400010,4}, {{0,0x1600,2},0x60600008,4},
@@ -540,6 +540,105 @@ bool preopTests() {
     return true;
 }
 
+bool initCommandTests() {
+    Fixture f;
+    V v;
+    std::string error;
+    std::ostringstream log;
+    auto *master = reinterpret_cast<ec_master_t *>(1);
+    const rocos::InitCommandConfig first[]{
+        {0x2000, 1, 1, {0xfe}}, {0x2000, 1, 2, {0xfe, 0xff}},
+        {0x2001, 0, 4, {0x78, 0x56, 0x34, 0x12}},
+        {0x2002, 255, 8, {0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01}}
+    };
+    const rocos::InitCommandConfig last{0x2003, 0, 1, {7}};
+    f.slaves[0].init_commands = first; f.slaves[0].init_command_count = 4;
+    f.slaves[1].init_commands = &last; f.slaves[1].init_command_count = 1;
+    resetFake();
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(v.configurePreop(master,5000,log,error));
+    CHECK(!invariant_failed && !v.complete() && !v.started());
+    const std::vector<std::tuple<Key,std::uint64_t,std::size_t>> expected{
+        {{0,0x2000,1},0xfe,1}, {{0,0x2000,1},0xfffe,2}, {{0,0x2001,0},0x12345678,4},
+        {{0,0x2002,255},UINT64_C(0x0123456789abcdef),8}, {{1,0x2003,0},7,1}};
+    CHECK(writes.size() > expected.size() && std::equal(expected.begin(),expected.end(),writes.begin()));
+    CHECK(std::get<0>(writes[5]) == Key(0,0x1c12,0)); // All init commands precede PDO configuration.
+    CHECK(uploads == 24); // Every PDO scalar is read, no readback of possibly write-only init objects.
+    CHECK(std::none_of(uploaded.begin(),uploaded.end(),[](const Key &k) { return std::get<1>(k) >= 0x2000; }));
+    const auto downloads_before_op = downloads;
+    CHECK(finish(v) == V::Result::Complete); // Activation-time PDO gate is unchanged.
+    CHECK(downloads == downloads_before_op); // No init writes after activation.
+
+    // PDO failure retries PDO configuration without replaying init commands.
+    resetFake(); preop_fault = 3; faults_left = 1; fault_key = {1,0x1a01,1};
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(v.configurePreop(master,5000,log,error));
+    CHECK(std::count_if(writes.begin(),writes.end(),[](const auto &w) {
+        return std::get<1>(std::get<0>(w)) >= 0x2000;
+    }) == 5);
+    CHECK(!invariant_failed);
+    resetFake(); preop_fault = 3; faults_left = 5; fault_key = {1,0x1a01,1};
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(!v.configurePreop(master,5000,log,error));
+    CHECK(v.error().failure == V::Failure::Value && v.error().check.slave_position == 7);
+
+    // Init failure (including a late successful SDO) must prevent all PDO writes.
+    for (int fault = 0; fault < 4; ++fault) {
+        resetFake();
+        if (fault == 0) { preop_fault = 1; faults_left = 1; fault_key = {0,0x2000,1}; }
+        if (fault == 1) lose_preop = true;
+        if (fault == 2) transfer_delay_ns = 6000000;
+        CHECK(v.prepare(f.config,f.handles,error));
+        CHECK(!v.configurePreop(master, fault == 3 ? 0 : 5,log,error));
+        CHECK(downloads == (fault == 3 ? 0 : 1) && uploads == 0);
+        CHECK(v.error().check.field == V::Field::InitCommand);
+        CHECK(error.find("Init command failed") != std::string::npos);
+        CHECK(error.find("object=0x2000:01") != std::string::npos);
+        if (fault == 0) CHECK(error.find("SDO abort=0x6010002") != std::string::npos);
+    }
+    resetFake(); preop_fault = 1; faults_left = 1; fault_key = {1,0x2003,0};
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(!v.configurePreop(master,5000,log,error));
+    CHECK(downloads == 5 && uploads == 0 && second_slave_ops == 1);
+    CHECK(error.find("slave[position=7]") != std::string::npos);
+    CHECK(error.find("object=0x2003:00") != std::string::npos);
+
+    // Budget is shared by init commands and PDOs, rather than restarted.
+    resetFake(); transfer_delay_ns = 1000000;
+    CHECK(v.prepare(f.config,f.handles,error));
+    CHECK(!v.configurePreop(master,7,log,error));
+    CHECK(downloads == 7 && v.error().failure == V::Failure::PreopTimeout);
+    CHECK(v.error().check.field != V::Field::InitCommand);
+    f.slaves[0].init_commands = nullptr;
+    CHECK(!v.prepare(f.config,f.handles,error));
+    rocos::InitCommandConfig invalid{0x2000,0,9,{}};
+    f.slaves[0].init_commands = &invalid; f.slaves[0].init_command_count = 1;
+    CHECK(!v.prepare(f.config,f.handles,error));
+
+    // LoadedSlaveConfig owns the init bytes after its source has been destroyed;
+    // prepare() in turn copies them for the entire initialization lifetime.
+    resetFake();
+    {
+        rocos::LoadedSlaveConfig loaded;
+        {
+            rocos::PdoBusConfig source;
+            rocos::SlavePdoConfig slave;
+            slave.name = "Drive";
+            slave.rx_pdos = {{0x1600, {{"Control",0x6040,0,16}}}};
+            slave.tx_pdos = {{0x1a00, {{"Status",0x6041,0,16}}}};
+            slave.init_commands = {last};
+            source.slaves.push_back(slave);
+            CHECK(loaded.build(std::move(source), error));
+        }
+        CHECK(loaded.view().slaves[0].init_command_count == 1);
+        CHECK(v.prepare(loaded.view(), {f.handles[0]}, error));
+    }
+    CHECK(v.configurePreop(master,5000,log,error));
+    CHECK(std::get<0>(writes.front()) == Key(0,0x2003,0) && std::get<1>(writes.front()) == 7);
+    CHECK(!invariant_failed);
+    return true;
+}
+
 bool cyclicTests() {
     // Real cyclic loop + fake transport/clock: client output must remain gated
     // even when OP and WCs are healthy throughout a failed verification.
@@ -619,4 +718,4 @@ bool cyclicTests() {
     return true;
 }
 }
-int main() { return unitTests() && preopTests() && cyclicTests() ? 0 : 1; }
+int main() { return unitTests() && preopTests() && initCommandTests() && cyclicTests() ? 0 : 1; }

@@ -65,7 +65,8 @@ public:
      * @brief Requests and configures the master for @p master_id.
      *
      * Creates one input and one output domain, configures each slave and
-     * registers its PDO entries, then activates the master and caches both
+     * registers its PDO entries, writes PREOP init_commands followed by PDO
+     * configuration/readback, then activates the master and caches both
      * domain buffers. Activation is not OP readiness: CyclicTask polls every
      * slave and the domain working counters, then asynchronously verifies each
      * slave's PDO assignment/mapping before releasing client data.

@@ -31,6 +31,7 @@ struct LoadedSlaveConfig::Impl {
         std::vector<ec_sync_info_t> syncs;
         std::vector<PdoEntrySpec> entries;
         std::optional<DistributedClockConfig> dc;
+        std::vector<InitCommandConfig> init_commands;
     };
 
     std::vector<SlaveStorage> storage;
@@ -105,6 +106,7 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
             target.id = source.id;
             target.name = source.name;
             target.dc = source.dc;
+            target.init_commands = source.init_commands;
 
             const std::size_t total_entries = entryCount(source.rx_pdos) +
                                               entryCount(source.tx_pdos);
@@ -133,7 +135,8 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
         for (Impl::SlaveStorage &target : built->storage) {
             built->slaves.push_back({0, target.id, 0, 0, target.name.c_str(),
                                      target.syncs.data(), target.entries.data(),
-                                     target.entries.size(), target.dc});
+                                     target.entries.size(), target.dc,
+                                     target.init_commands.data(), target.init_commands.size()});
         }
 
         const StaticSlaveConfig candidate{built->slaves.data(), built->slaves.size()};
@@ -303,6 +306,19 @@ bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) no
             if (slave.entry_count > 0 && slave.entries == nullptr) {
                 error = "slave[" + std::to_string(slave_index) + "] entries must be non-null when entry_count > 0";
                 return false;
+            }
+
+            if (slave.init_command_count != 0 && slave.init_commands == nullptr) {
+                error = "slave[" + std::to_string(slave_index) + "] init_commands must be non-null";
+                return false;
+            }
+            for (std::size_t i = 0; i < slave.init_command_count; ++i) {
+                const auto size = slave.init_commands[i].size;
+                if (size != 1 && size != 2 && size != 4 && size != 8) {
+                    error = "slave[" + std::to_string(slave_index) + "] init_commands[" +
+                            std::to_string(i) + "] size must be 1, 2, 4 or 8";
+                    return false;
+                }
             }
 
             std::size_t input_count = 0;

@@ -85,6 +85,7 @@ if(BUILD_TESTING)
 		target_link_options(startup_state_test PRIVATE "-Wl,--wrap=ecrt_slave_config_state")
 		add_test(NAME startup_state COMMAND startup_state_test)
 		add_executable(dc_timing_test tests/dc_timing_test.cpp)
+		target_compile_definitions(dc_timing_test PRIVATE ROCOS_IGH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 		target_link_libraries(dc_timing_test PRIVATE rocos_igh_core)
 		foreach(symbol clock_gettime ecrt_master_activate ecrt_master_application_time
 			ecrt_master_sync_reference_clock_to ecrt_master_sync_slave_clocks
