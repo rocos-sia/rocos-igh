@@ -18,7 +18,7 @@ master:
   # 可选，默认 null。null 沿用启动时的 CPU 亲和性；非负整数指定逻辑 CPU 编号。
   # 仅绑定周期线程；目标 CPU 必须在线且允许当前进程使用，启动时会验证。
   # 命令行覆盖：--cpu <id>；--cpu auto 可临时取消此处设置的绑定。
-  cpu: null
+  cpu: 0
 
   # 可选，默认 off。仅接受小写 on / off；dc: off 和 dc: "off" 均可。
   # on 为全部从站启用 DC，要求恰有一个从站 dc_ref: true；其他从站可为 false 或省略。
