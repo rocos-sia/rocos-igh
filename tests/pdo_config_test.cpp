@@ -361,6 +361,40 @@ bool testRejectsInvalidDistributedClockConfig() {
     return true;
 }
 
+  bool testEmptyEntries() {
+    const std::string rx_entries =
+        "entries:\n          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}";
+    const std::string tx_entries =
+        "entries:\n          - {name: Status Word, index: 0x6041, sub_index: 0, bit_length: 16}";
+    for (const std::string value : {"[]", "{}", "null", "", "~"}) {
+      for (const bool empty_tx : {false, true}) {
+        std::string yaml = replaceOnce(validYaml(), rx_entries, "entries: " + value);
+        if (empty_tx) yaml = replaceOnce(yaml, tx_entries, "entries: " + value);
+        const TemporaryYamlFile file(yaml);
+        rocos::PdoBusConfig config;
+        std::string error;
+        CHECK(rocos::loadPdoConfig(file.path(), config, error));
+        CHECK(error.empty());
+        CHECK(config.slaves.size() == 1U);
+        CHECK(config.slaves[0].rx_pdos.size() == 1U);
+        CHECK(config.slaves[0].rx_pdos[0].index == 0x1600);
+        CHECK(config.slaves[0].rx_pdos[0].entries.empty());
+        CHECK(config.slaves[0].tx_pdos.size() == 1U);
+        CHECK(config.slaves[0].tx_pdos[0].index == 0x1A00);
+        CHECK(config.slaves[0].tx_pdos[0].entries.size() == (empty_tx ? 0U : 1U));
+      }
+    }
+    for (const std::string value : {"{name: Wrong}", "''", "0", "false", "[null]"}) {
+      CHECK(expectConfigError(replaceOnce(validYaml(), rx_entries, "entries: " + value),
+                              "slaves[0].rx_pdos[0].entries"));
+      CHECK(expectConfigError(replaceOnce(validYaml(), tx_entries, "entries: " + value),
+                              "slaves[0].tx_pdos[0].entries"));
+    }
+    CHECK(expectConfigError(replaceOnce(validYaml(), rx_entries, ""),
+                            "slaves[0].rx_pdos[0].entries is required"));
+    return true;
+  }
+
   bool testRejectsInvalidConfigFields() {
     std::vector<std::pair<std::string, std::string>> cases;
     cases.emplace_back(validYaml() + "unexpected: true\n", "root.unexpected is not allowed");
@@ -380,7 +414,7 @@ bool testRejectsInvalidDistributedClockConfig() {
                "slaves[0].id is duplicated");
     cases.emplace_back(replaceOnce(validYaml(), "name: Drive", "name: ''"),
                "slaves[0].name");
-    cases.emplace_back(replaceOnce(validYaml(), "bit_length: 16", "bit_length: 7"),
+    cases.emplace_back(replaceOnce(validYaml(), "bit_length: 16", "bit_length: 0"),
                "slaves[0].rx_pdos[0].entries[0].bit_length");
     cases.emplace_back(replaceOnce(validYaml(), "index: 0x6040", "index: 65536"),
                "slaves[0].rx_pdos[0].entries[0].index");
@@ -395,11 +429,6 @@ bool testRejectsInvalidDistributedClockConfig() {
                  "          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}\n",
                  "rx_pdos: []\n"),
                "slaves[0].rx_pdos");
-      cases.emplace_back(replaceOnce(
-                   validYaml(),
-                   "entries:\n          - {name: Control Word, index: 0x6040, sub_index: 0, bit_length: 16}",
-                   "entries: []"),
-                 "slaves[0].rx_pdos[0].entries");
       cases.emplace_back("version: [\n", "yaml-cpp");
 
     for (const auto &test_case : cases) {
@@ -456,12 +485,19 @@ bool testRejectsInvalidDistributedClockConfig() {
             CHECK(config.slaves[i].dc->reference == (i == 0));
         }
     }
+    CHECK(rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/tc7_pdo.yaml", config, error));
+    CHECK(error.empty());
+    CHECK(config.slaves.size() == 8U);
+    // Discovery may have populated this operational configuration on startup.
+    CHECK(config.slaves[7].rx_pdos[0].index == 0x1600);
+    CHECK(config.slaves[7].tx_pdos[0].index == 0x1a00);
     return true;
   }
 
 }  // namespace
 
 int main() {
+  if (!testEmptyEntries()) return 1;
   if (!testInitCommands() || !testInvalidInitCommands()) return 1;
   if (!testMasterOptions() || !testInvalidMasterOptions()) return 1;
   if (!testLoadsValidMultiSlaveConfig()) {

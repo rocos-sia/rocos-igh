@@ -186,7 +186,13 @@ void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &outpu
                            << static_cast<unsigned int>(entry.sub_index)
                            << std::dec << std::setfill(' ') << "  "
                            << static_cast<unsigned int>(entry.bit_length)
-                           << " bit  offset=" << entry.offset << "  " << entry.name << '\n';
+                           << " bit  offset=" << entry.offset << "  " << entry.name;
+                    if (entry.bit_position != 0 || entry.bit_length % 8 != 0) {
+                        output << " bit_position=" << entry.bit_position
+                               << " shared_offset=" << entry.shared_offset
+                               << " shared_size=" << (unsigned(entry.bit_length) + 7U) / 8U;
+                    }
+                    output << '\n';
                 }
             }
         };
@@ -333,12 +339,8 @@ bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) no
                     error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] bit_length must be > 0";
                     return false;
                 }
-                if ((entry.bit_length % 8U) != 0U) {
-                    error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] must be byte-aligned (bit_length % 8 == 0)";
-                    return false;
-                }
-                if (entry.bit_position != 0U) {
-                    error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] bit_position must be 0";
+                if (entry.bit_position > 7U) {
+                    error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] bit_position must be 0..7";
                     return false;
                 }
 
@@ -394,21 +396,28 @@ bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &e
             int output_count = 0;
             for (std::size_t entry_index = 0; entry_index < source_slave.entry_count; ++entry_index) {
                 const PdoEntrySpec &entry = source_slave.entries[entry_index];
-                if (entry.offset > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
+                const bool expanded = entry.bit_position != 0 || entry.bit_length % 8 != 0;
+                if (expanded && entry.shared_offset == std::numeric_limits<unsigned int>::max()) {
+                    error = "bit PDO shared-memory layout has not been prepared";
+                    return false;
+                }
+                const auto offset = entry.shared_offset == std::numeric_limits<unsigned int>::max()
+                    ? entry.offset : entry.shared_offset;
+                if (offset > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
                     error = "entry offset exceeds PdVar range";
                     return false;
                 }
 
-                const unsigned int byte_size = static_cast<unsigned int>(entry.bit_length / 8U);
+                const unsigned int byte_size = (static_cast<unsigned int>(entry.bit_length) + 7U) / 8U;
                 if (byte_size > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
                     error = "entry size exceeds PdVar range";
                     return false;
                 }
-                if (entry.offset > EC_SHM_MAX_SIZE) {
+                if (offset > EC_SHM_MAX_SIZE) {
                     error = "entry offset exceeds EC_SHM_MAX_SIZE";
                     return false;
                 }
-                if (byte_size > (EC_SHM_MAX_SIZE - entry.offset)) {
+                if (byte_size > (EC_SHM_MAX_SIZE - offset)) {
                     error = "entry offset + size exceeds EC_SHM_MAX_SIZE";
                     return false;
                 }
@@ -430,7 +439,7 @@ bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &e
 
                 std::strncpy(target_var->name, entry.name, MAX_PD_NAME_LEN - 1);
                 target_var->name[MAX_PD_NAME_LEN - 1] = '\0';
-                target_var->offset = static_cast<int>(entry.offset);
+                target_var->offset = static_cast<int>(offset);
                 target_var->size = static_cast<int>(byte_size);
                 target_var->index = entry.index;
                 target_var->sub_index = entry.sub_index;

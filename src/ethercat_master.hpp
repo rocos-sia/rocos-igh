@@ -10,6 +10,7 @@
 
 #include "slave_config.hpp"
 #include "pdo_verification.hpp"
+#include "process_data_layout.hpp"
 
 namespace rocos {
 
@@ -86,6 +87,10 @@ public:
                     std::string &error,
                     std::uint32_t preop_timeout_ms = 5000U,
                     std::uint32_t pdo_config_attempts = 5U);
+    /// Resolves empty YAML entries by SDO and saves them before configuring PDOs.
+    /// loaded_config must outlive this master and owns the resolved PDO views.
+    bool initialize(const RuntimeOptions &options, PdoBusConfig config,
+                    LoadedSlaveConfig &loaded_config, std::string &error);
     /// @brief Receives a frame and processes both domains (rt_safe).
     void receiveAndProcess() noexcept;
     /// @brief Sets the DC application time for the current cycle (rt_safe).
@@ -111,6 +116,11 @@ public:
     std::size_t inputSize() const noexcept;
     /// @brief Returns the output-domain process-data size in bytes.
     std::size_t outputSize() const noexcept;
+    /// Shared images include separate byte slots for packed wire entries.
+    std::size_t sharedInputSize() const noexcept;
+    std::size_t sharedOutputSize() const noexcept;
+    /// Publish all inputs, then consume outputs; no allocation or blocking.
+    void exchangeProcessData(void *shared_input, const void *shared_output) const noexcept;
     /// @brief Returns true once initialize() has completed successfully.
     bool initialized() const noexcept;
     /// @brief Returns the last realtime DC API failure without allocation.
@@ -120,6 +130,12 @@ public:
 
 private:
     friend struct EthercatMasterTestPeer;
+
+    bool initializeImpl(unsigned int master_id, StaticSlaveConfig config, bool dc_enabled,
+                        std::uint32_t period_us, std::string &error,
+                        std::uint32_t preop_timeout_ms, std::uint32_t pdo_config_attempts,
+                        PdoBusConfig *yaml_config, LoadedSlaveConfig *loaded_config,
+                        const std::string &config_path);
 
     static bool slaveReadyForConfiguration(const ec_slave_info_t &slave_info) noexcept;
     bool waitForSlavesInPreop(const StaticSlaveConfig &config,
@@ -137,6 +153,7 @@ private:
 
     std::vector<ec_slave_config_t *> slave_configs_;
     PdoVerification pdo_verification_;
+    ProcessDataLayout process_data_layout_;
     ec_master_t *master_{nullptr};
     ec_domain_t *input_domain_{nullptr};
     ec_domain_t *output_domain_{nullptr};

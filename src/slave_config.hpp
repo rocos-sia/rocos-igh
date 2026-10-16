@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -36,9 +37,11 @@ struct PdoEntrySpec {
     PdoDirection direction;      ///< Input (TxPDO) or output (RxPDO).
     std::uint16_t index;         ///< PDO object index.
     std::uint8_t sub_index;      ///< PDO object sub-index.
-    std::uint8_t bit_length;     ///< Bit width (must be a multiple of 8).
+    std::uint8_t bit_length;     ///< Wire bit width (1..255).
     unsigned int offset;         ///< Byte offset in the domain (filled by IgH).
-    unsigned int bit_position;   ///< Bit position within the byte (must be 0).
+    unsigned int bit_position;   ///< Wire bit position within the byte (0..7).
+    // Process-local metadata only; PdVar and the shared-memory ABI are unchanged.
+    unsigned int shared_offset{std::numeric_limits<unsigned int>::max()};
 };
 
 /**

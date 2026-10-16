@@ -204,13 +204,8 @@ int main(int argc, char **argv) {
                   << " ns; expected 1 ns high-resolution clock\n";
     }
 
-    // —— 第二步：将已加载的 PDO 配置构建为 IgH 配置视图 ——
+    // Owns the PDO views, including entries discovered during PREOP initialization.
     rocos::LoadedSlaveConfig loaded_config;
-    if (!loaded_config.build(std::move(pdo_config), error)) {
-        std::cerr << error << '\n';
-        return EXIT_FAILURE;
-    }
-    rocos::StaticSlaveConfig config = loaded_config.view();
 
     // —— 第三步：安装信号处理器 ——
     if (!installSignalHandlers(error)) {
@@ -220,12 +215,11 @@ int main(int argc, char **argv) {
 
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
     rocos::EthercatMaster master; // RAII 封装一个 IgH 主站
-    if (!master.initialize(options.master_id, config, options.dc_enabled,
-                           options.period_us, error, options.preop_timeout_ms,
-                           options.pdo_config_attempts)) { // 配置或激活失败
+    if (!master.initialize(options, std::move(pdo_config), loaded_config, error)) {
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
+    rocos::StaticSlaveConfig config = loaded_config.view();
     rocos::printLoadedSlaveConfig(loaded_config, std::cout);
 
     // —— 第五步：创建共享内存 IPC（总线快照 + PDO 缓冲区）——
@@ -234,8 +228,8 @@ int main(int argc, char **argv) {
         std::cerr << "failed to create shared memory" << '\n';
         return EXIT_FAILURE;
     }
-    if (!ipc.createPdDataMemoryProvider(static_cast<int>(master.inputSize()), // 输入域大小
-                                        static_cast<int>(master.outputSize()))) { // 输出域大小
+    if (!ipc.createPdDataMemoryProvider(static_cast<int>(master.sharedInputSize()),
+                                        static_cast<int>(master.sharedOutputSize()))) {
         std::cerr << "failed to create process data memory" << '\n';
         return EXIT_FAILURE;
     }

@@ -1006,7 +1006,7 @@ bool testSlaveConfigValidation() {
     CHECK(error.find("requires alias 0") != std::string::npos);
 
     rocos::PdoEntrySpec invalid_entry{
-        "status", rocos::PdoDirection::Input, 0x6000, 1, 7, 0, 0
+        "status", rocos::PdoDirection::Input, 0x6000, 1, 7, 0, 8
     };
     rocos::SlaveSpec invalid_slave{
         0, 0, 0x00000002, 0x12345678, "invalid", sync_table,
@@ -1014,7 +1014,7 @@ bool testSlaveConfigValidation() {
     };
     const rocos::StaticSlaveConfig invalid_config{&invalid_slave, 1};
     CHECK(!rocos::validateSlaveConfig(invalid_config, error));
-    CHECK(error.find("byte-aligned") != std::string::npos);
+    CHECK(error.find("bit_position") != std::string::npos);
     return true;
 }
 #endif

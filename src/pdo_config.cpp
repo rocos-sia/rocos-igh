@@ -6,6 +6,8 @@
 
 #include <charconv>
 #include <initializer_list>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -268,8 +270,10 @@ std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
             std::numeric_limits<std::uint16_t>::max()));
 
         const YAML::Node entries = requireNode(pdo_node, "entries", pdo_path);
-        if (!entries.IsSequence() || entries.size() == 0U) {
-            throw std::runtime_error(pdo_path + ".entries must be a non-empty sequence");
+        // Accept explicit empty YAML values while keeping populated entries a sequence.
+        if (!entries.IsSequence() && !entries.IsNull() &&
+            !(entries.IsMap() && entries.size() == 0U)) {
+            throw std::runtime_error(pdo_path + ".entries must be a sequence or empty (null / {})");
         }
         pdo.entries.reserve(entries.size());
         for (std::size_t entry_index = 0; entry_index < entries.size(); ++entry_index) {
@@ -295,9 +299,9 @@ std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
             entry.bit_length = static_cast<std::uint8_t>(parseUnsigned(
                 requireNode(entry_node, "bit_length", entry_path),
                 entry_path + ".bit_length", std::numeric_limits<std::uint8_t>::max()));
-            if (entry.bit_length == 0U || (entry.bit_length % 8U) != 0U) {
+            if (entry.bit_length == 0U) {
                 throw std::runtime_error(entry_path +
-                                         ".bit_length must be a non-zero multiple of 8");
+                                         ".bit_length must be between 1 and 255");
             }
             pdo.entries.push_back(std::move(entry));
         }
@@ -313,7 +317,11 @@ bool loadPdoConfig(const std::string &path,
                    std::string &error) noexcept {
     try {
         error.clear();
-        const YAML::Node root = YAML::LoadFile(path);
+        std::ifstream input(path, std::ios::binary);
+        if (!input) throw std::runtime_error("cannot open configuration file");
+        const std::string source((std::istreambuf_iterator<char>(input)), {});
+        if (input.bad()) throw std::runtime_error("cannot read configuration file");
+        const YAML::Node root = YAML::Load(source);
         if (!root.IsMap()) {
             throw std::runtime_error("root must be a mapping");
         }
@@ -335,6 +343,7 @@ bool loadPdoConfig(const std::string &path,
         }
 
         PdoBusConfig loaded;
+        loaded.source_yaml = source;
         if (root["master"]) loaded.master = parseMasterOptions(root["master"]);
         loaded.slaves.reserve(slaves.size());
         for (std::size_t slave_index = 0; slave_index < slaves.size(); ++slave_index) {

@@ -12,8 +12,11 @@ if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
 		src/pdo_config.cpp
+		src/pdo_config_file.cpp
+		src/pdo_discovery.cpp
 		src/pdo_verification.cpp
 		src/slave_config.cpp
+		src/process_data_layout.cpp
 		src/ethercat_master.cpp
 		src/cyclic_task.cpp
 		src/runtime_options.cpp
@@ -51,6 +54,13 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_executable(process_data_layout_test tests/process_data_layout_test.cpp)
+	if(NOT ROCOS_IGH_BUILD_MASTER)
+		target_sources(process_data_layout_test PRIVATE src/process_data_layout.cpp src/slave_config.cpp)
+	endif()
+	target_link_libraries(process_data_layout_test PRIVATE rocos_igh_core)
+	add_test(NAME process_data_layout COMMAND process_data_layout_test)
+	set_tests_properties(process_data_layout PROPERTIES TIMEOUT 15)
 	add_executable(runtime_report_test tests/runtime_report_test.cpp)
 	target_include_directories(runtime_report_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 	target_compile_features(runtime_report_test PRIVATE cxx_std_17)
@@ -68,6 +78,14 @@ if(BUILD_TESTING)
 	add_test(NAME thread_affinity COMMAND thread_affinity_test)
 	set_tests_properties(thread_affinity PROPERTIES TIMEOUT 10)
 	if(ROCOS_IGH_BUILD_MASTER)
+		add_executable(pdo_discovery_test tests/pdo_discovery_test.cpp)
+		target_link_libraries(pdo_discovery_test PRIVATE rocos_igh_core)
+		foreach(symbol ecrt_master_sdo_upload ecrt_master_get_slave rename ecrt_request_master
+			ecrt_release_master ecrt_master_create_domain ecrt_master_activate ecrt_master_sdo_download)
+			target_link_options(pdo_discovery_test PRIVATE "-Wl,--wrap=${symbol}")
+		endforeach()
+		add_test(NAME pdo_discovery COMMAND pdo_discovery_test)
+		set_tests_properties(pdo_discovery PROPERTIES TIMEOUT 15)
 		add_executable(pdo_verification_test tests/pdo_verification_test.cpp)
 		target_link_libraries(pdo_verification_test PRIVATE rocos_igh_core)
 		foreach(symbol ecrt_slave_config_create_sdo_request ecrt_sdo_request_timeout

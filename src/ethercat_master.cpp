@@ -1,6 +1,7 @@
 #include "ethercat_master.hpp"
 
 #include "shared_memory_config.hpp"
+#include "pdo_discovery.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -65,6 +66,24 @@ bool EthercatMaster::initialize(unsigned int master_id,
                                 std::string &error,
                                 std::uint32_t preop_timeout_ms,
                                 std::uint32_t pdo_config_attempts) {
+    return initializeImpl(master_id, config, dc_enabled, period_us, error,
+                          preop_timeout_ms, pdo_config_attempts, nullptr, nullptr, {});
+}
+
+bool EthercatMaster::initialize(const RuntimeOptions &options, PdoBusConfig config,
+                                LoadedSlaveConfig &loaded_config, std::string &error) {
+    if (initialized_) { error = "master already initialized"; return false; }
+    if (!loaded_config.build(config, error)) return false;
+    return initializeImpl(options.master_id, loaded_config.view(), options.dc_enabled,
+        options.period_us, error, options.preop_timeout_ms, options.pdo_config_attempts,
+        &config, &loaded_config, options.config_path);
+}
+
+bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig config,
+                                    bool dc_enabled, std::uint32_t period_us, std::string &error,
+                                    std::uint32_t preop_timeout_ms, std::uint32_t pdo_config_attempts,
+                                    PdoBusConfig *yaml_config, LoadedSlaveConfig *loaded_config,
+                                    const std::string &config_path) {
     error.clear();
     last_dc_error_ = DcError{};
 
@@ -125,6 +144,19 @@ bool EthercatMaster::initialize(unsigned int master_id,
     if (!waitForSlavesInPreop(config, error, preop_timeout_ms)) {
         reset();
         return false;
+    }
+
+    // Resolve defaults before IgH PDO setup, entry registration or any SDO download.
+    if (yaml_config != nullptr) {
+        const auto previous_yaml = yaml_config->source_yaml;
+        if (!discoverEmptyPdoEntries(master_, *yaml_config, config_path, preop_deadline, error) ||
+            !loaded_config->build(*yaml_config, error)) {
+            reset();
+            return false;
+        }
+        config = loaded_config->view();
+        if (yaml_config->source_yaml != previous_yaml)
+            std::cout << "Discovered PDO entries saved to " << config_path << '\n';
     }
 
     slave_configs_.reserve(config.slave_count);
@@ -274,8 +306,8 @@ bool EthercatMaster::initialize(unsigned int master_id,
                         reset();
                         return false;
                     }
-                    if (bit_position != 0U) {
-                        error = "pdo entry is not byte-aligned";
+                    if (bit_position > 7U) {
+                        error = "PDO entry bit position exceeds 7";
                         reset();
                         return false;
                     }
@@ -352,6 +384,12 @@ bool EthercatMaster::initialize(unsigned int master_id,
         return false;
     }
 
+    // Domain sizes become available after activation. Prepare this local copy
+    // plan before IPC publication and before starting the cyclic thread.
+    if (!process_data_layout_.build(config, input_size_, output_size_, error)) {
+        reset();
+        return false;
+    }
     std::memset(output_data_, 0, output_size_);
     dc_enabled_ = dc_runtime.enabled;
     initialized_ = true;
@@ -656,6 +694,25 @@ std::size_t EthercatMaster::outputSize() const noexcept {
     return output_size_;
 }
 
+std::size_t EthercatMaster::sharedInputSize() const noexcept {
+    return std::max(input_size_, process_data_layout_.inputSize());
+}
+
+std::size_t EthercatMaster::sharedOutputSize() const noexcept {
+    return std::max(output_size_, process_data_layout_.outputSize());
+}
+
+void EthercatMaster::exchangeProcessData(void *shared_input, const void *shared_output) const noexcept {
+    if (input_data_ != nullptr && shared_input != nullptr && input_size_ != 0) {
+        std::memcpy(shared_input, input_data_, input_size_);
+        process_data_layout_.unpackInputs(input_data_, shared_input);
+    }
+    if (output_data_ != nullptr && shared_output != nullptr && output_size_ != 0) {
+        std::memcpy(output_data_, shared_output, output_size_);
+        process_data_layout_.packOutputs(shared_output, output_data_);
+    }
+}
+
 // Returns true once initialize() has completed successfully.
 bool EthercatMaster::initialized() const noexcept {
     return initialized_;
@@ -673,6 +730,7 @@ void EthercatMaster::recordDcError(DcErrorStage stage, int error_code) noexcept 
 // Releases the master at most once and nulls every borrowed pointer and domain.
 void EthercatMaster::reset() noexcept {
     pdo_verification_.reset();
+    process_data_layout_.reset();
     slave_configs_.clear();
     input_data_ = nullptr;
     output_data_ = nullptr;

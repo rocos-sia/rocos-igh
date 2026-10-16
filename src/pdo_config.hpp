@@ -50,10 +50,16 @@ struct SlavePdoConfig {
 struct PdoBusConfig {
     std::vector<SlavePdoConfig> slaves;
     RuntimeOptions master; ///< Optional YAML startup defaults; CLI overrides these.
+    std::string source_yaml; ///< Original file snapshot for guarded discovery writeback.
 };
 
 bool loadPdoConfig(const std::string &path,
                    PdoBusConfig &config,
                    std::string &error) noexcept;
+
+// Replace only originally empty entries, preserving surrounding YAML text.
+// Validates the result and atomically replaces the file if its snapshot still matches.
+bool saveDiscoveredPdoConfig(const std::string &path, const PdoBusConfig &original,
+                             PdoBusConfig &resolved, std::string &error) noexcept;
 
 }  // namespace rocos

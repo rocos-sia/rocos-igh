@@ -1,6 +1,7 @@
 #include "pdo_verification.hpp"
 
 #include <cerrno>
+#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <ostream>
@@ -251,6 +252,9 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
     const Field phases[]{Field::AssignmentCount, Field::MappingCount,
                          Field::MappingEntry, Field::MappingCount,
                          Field::Assignment, Field::AssignmentCount};
+    // Startup-only storage. A fixed mapping that already matches must never be
+    // cleared/re-written, including on subsequent starts after YAML discovery.
+    std::vector<bool> keep_mapping(checks_.size(), false);
     for (std::size_t begin = 0; begin < checks_.size();) {
         std::size_t end = begin + 1;
         while (end < checks_.size() &&
@@ -259,10 +263,44 @@ bool PdoVerification::configurePreop(ec_master_t *master, std::uint32_t timeout_
         for (std::uint64_t attempt = 1; attempt <= max_attempts; ++attempt) {
             result_ = Result::Pending;
             error_ = {};
+            std::fill(keep_mapping.begin() + begin, keep_mapping.begin() + end, false);
+            for (cursor_ = begin; cursor_ < end && result_ == Result::Pending; ++cursor_) {
+                if (checks_[cursor_].field != Field::MappingCount || checks_[cursor_].expected == 0U) continue;
+                const auto mapping_begin = cursor_;
+                const auto mapping_end = mapping_begin + 1 + checks_[mapping_begin].expected;
+                bool matches = true;
+                for (; cursor_ < mapping_end; ++cursor_) {
+                    const auto &c = checks_[cursor_];
+                    if (!guard(c)) break;
+                    std::uint8_t data[4]{};
+                    std::size_t size = 0;
+                    std::uint32_t abort_code = 0;
+                    const int rc = ecrt_master_sdo_upload(master, c.slave_position,
+                        c.index, c.subindex, data, sizeof(data), &size, &abort_code);
+                    if (!guard(c)) break;
+                    if (rc != 0) {
+                        fail(Failure::Read, rc);
+                        error_.abort_code = abort_code;
+                        break;
+                    }
+                    if (size != c.size) { fail(Failure::Size, 0, 0, size); break; }
+                    std::uint32_t value = 0;
+                    for (std::size_t i = 0; i < size; ++i) value |= std::uint32_t{data[i]} << (8 * i);
+                    if (value != c.expected) { matches = false; break; }
+                }
+                if (matches && result_ == Result::Pending)
+                    std::fill(keep_mapping.begin() + mapping_begin, keep_mapping.begin() + mapping_end, true);
+                cursor_ = mapping_end - 1;
+            }
             for (unsigned int phase = 0; phase < 6 && result_ == Result::Pending; ++phase) {
                 for (cursor_ = begin; cursor_ < end; ++cursor_) {
                     const auto &c = checks_[cursor_];
                     if (c.field != phases[phase]) continue;
+                    if (keep_mapping[cursor_]) continue;
+                    // Empty PDOs may expose a fixed, read-only mapping count.
+                    // Leave it untouched in both mapping-count phases; the
+                    // PREOP readback and startup verification still require 0.
+                    if (c.field == Field::MappingCount && c.expected == 0U) continue;
                     if (!guard(c)) break;
                     const auto value = phase < 2 ? 0U : c.expected;
                     std::uint8_t data[4]{};

@@ -40,6 +40,7 @@ struct Request {
 };
 std::array<Request, 2> requests;
 std::map<Key, Value> dictionary;
+std::vector<Key> read_only_objects;
 unsigned int create_calls = 0, read_calls = 0, data_calls = 0, sends = 0;
 int create_fail_at = -1, timeout_rc = 0, index_rc = 0, read_rc = 0;
 bool read_error = false, forever_busy = false, unused_state = false;
@@ -89,7 +90,7 @@ void resetFake() {
     lose_preop = slave_error_flag = state_query_error = false;
     transfer_delay_ns = 0;
     fault_key = {0,0x1c12,0};
-    writes.clear(); uploaded.clear();
+    writes.clear(); uploaded.clear(); read_only_objects.clear();
     // Independently specified device dictionary: multiple PDOs, different
     // layouts per slave, byte-sized mode, and an explicit padding entry.
     dictionary = {
@@ -197,13 +198,19 @@ extern "C" int __wrap_ecrt_master_sdo_download(ec_master_t *, std::uint16_t posi
     std::uint32_t *abort_code) {
     const auto slave = fakeSlave(position);
     ++downloads;
-    if (slave == 1 && second_slave_ops == 0) first_slave_reads_at_second_write = uploads;
+    if (slave == 1 && std::none_of(writes.begin(), writes.end(), [](const auto &write) {
+            return std::get<0>(std::get<0>(write)) == 1;
+        })) first_slave_reads_at_second_write = uploads;
     if (slave == 1) ++second_slave_ops;
     now_ns += transfer_delay_ns;
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < size; ++i) value |= std::uint64_t{data[i]} << (8*i);
     const Key key{slave,index,sub};
     writes.emplace_back(key, value, size);
+    if (std::find(read_only_objects.begin(), read_only_objects.end(), key) != read_only_objects.end()) {
+        *abort_code = 0x06010002;
+        return -EIO;
+    }
     if (preop_fault == 1 && key == fault_key && faults_left-- > 0) {
         *abort_code = 0x06010002;
         return -EIO;
@@ -234,7 +241,9 @@ extern "C" int __wrap_ecrt_master_sdo_upload(ec_master_t *, std::uint16_t positi
         *abort_code = 0x06020000;
         return -EIO;
     }
-    auto value = dictionary.at(key);
+    const auto found = dictionary.find(key);
+    if (found == dictionary.end()) { *abort_code = 0x06020000; return -EIO; }
+    auto value = found->second;
     if (faulty && preop_fault == 3) value.value ^= 1;
     if (faulty && preop_fault == 4) value.size = 0;
     if (capacity < value.size) return -EOVERFLOW;
@@ -306,6 +315,18 @@ extern "C" void __wrap_ecrt_release_master(ec_master_t *) {}
 
 namespace rocos {
 struct EthercatMasterTestPeer {
+    static bool packedLayout(EthercatMaster &m, EcatBus &bus, std::string &error) {
+        std::vector<PdoEntrySpec> entries;
+        for (const auto dir : {PdoDirection::Input, PdoDirection::Output})
+            for (unsigned int bit = 0; bit < 8; ++bit)
+                entries.push_back({"GPIO", dir, 0x7000, static_cast<std::uint8_t>(bit + 1), 1, 0, bit});
+        SlaveSpec slave{};
+        slave.name = "GPIO";
+        slave.syncs = reinterpret_cast<const ec_sync_info_t *>(1);
+        slave.entries = entries.data(); slave.entry_count = entries.size();
+        const StaticSlaveConfig config{&slave,1};
+        return m.process_data_layout_.build(config, 1, 1, error) && publishConfig(bus, config, error);
+    }
     static void seed(EthercatMaster &m, const Fixture &f, std::uint8_t *in, std::uint8_t *out) {
         m.initialized_ = true;
         m.master_ = reinterpret_cast<ec_master_t *>(1);
@@ -320,6 +341,84 @@ struct EthercatMasterTestPeer {
 
 #define CHECK(x) do { if (!(x)) { std::cerr << __LINE__ << ": " #x "\n"; return false; } } while (false)
 namespace {
+bool emptyMappingTests() {
+    for (const bool mixed : {false, true}) {
+        resetFake();
+        // Reproduce devices whose empty mapping counts reject every write,
+        // including writing zero to a count that already is zero.
+        read_only_objects = {{0,0x1600,0}, {0,0x1a00,0}};
+        dictionary[Key(0,0x1600,0)] = {0,1};
+        dictionary[Key(0,0x1a00,0)] = {0,1};
+        dictionary[Key(0,0x1a01,0)] = {0,1};
+        rocos::PdoBusConfig source;
+        rocos::SlavePdoConfig slave;
+        slave.name = "Empty PDO slave";
+        slave.rx_pdos = {{0x1600, {}}};
+        slave.tx_pdos = {{0x1a00, {}}};
+        if (mixed) {
+            slave.rx_pdos.push_back({0x1601, {{"Control Word", 0x6040, 0, 16}}});
+            slave.tx_pdos.push_back({0x1a01, {{"Status Word", 0x6041, 0, 16}}});
+        }
+        source.slaves.push_back(slave);
+        rocos::LoadedSlaveConfig loaded;
+        std::string error;
+        CHECK(loaded.build(std::move(source), error));
+        const auto config = loaded.view();
+        CHECK(config.slave_count == 1);
+        CHECK(config.slaves[0].entry_count == (mixed ? 2U : 0U));
+        for (unsigned int sm = 0; sm < 2; ++sm) {
+            CHECK(config.slaves[0].syncs[sm].n_pdos == (mixed ? 2U : 1U));
+            CHECK(config.slaves[0].syncs[sm].pdos[0].n_entries == 0);
+        }
+        rocos::EcatBus bus{};
+        CHECK(rocos::publishConfig(bus, config, error));
+        CHECK(bus.slave_num == 1);
+        CHECK(bus.slaves[0].input_var_num == (mixed ? 1 : 0));
+        CHECK(bus.slaves[0].output_var_num == (mixed ? 1 : 0));
+        V verification;
+        CHECK(verification.prepare(config, {reinterpret_cast<ec_slave_config_t *>(1)}, error));
+        std::ostringstream log;
+        CHECK(verification.configurePreop(reinterpret_cast<ec_master_t *>(1), 5000, log, error));
+        CHECK(dictionary.at(Key(0,0x1600,0)).value == 0);
+        CHECK(dictionary.at(Key(0,0x1a00,0)).value == 0);
+        for (const auto &write : writes) {
+            const auto index = std::get<1>(std::get<0>(write));
+            CHECK(index != 0x1600 && index != 0x1a00);
+        }
+        for (const auto &key : read_only_objects) {
+            CHECK(std::count(uploaded.begin(), uploaded.end(), key) == 1);
+        }
+        if (mixed) {
+            CHECK(dictionary.at(Key(0,0x1601,0)).value == 1);
+            CHECK(dictionary.at(Key(0,0x1601,1)).value == 0x60400010);
+            CHECK(dictionary.at(Key(0,0x1a01,0)).value == 1);
+            CHECK(dictionary.at(Key(0,0x1a01,1)).value == 0x60410010);
+        }
+        CHECK(finish(verification) == V::Result::Complete);
+        CHECK(!invariant_failed && rt_allocations == 0);
+        // An empty PDO must still have its zero mapping count verified.
+        dictionary[Key(0,0x1600,0)].value = 1;
+        CHECK(verification.prepare(config, {reinterpret_cast<ec_slave_config_t *>(1)}, error));
+        CHECK(finish(verification) == V::Result::Failed);
+        CHECK(verification.error().check.index == 0x1600);
+        CHECK(verification.error().failure == V::Failure::Value);
+        CHECK(verification.prepare(config, {reinterpret_cast<ec_slave_config_t *>(1)}, error));
+        CHECK(!verification.configurePreop(reinterpret_cast<ec_master_t *>(1), 5000, log, error, 1));
+        CHECK(verification.error().check.index == 0x1600);
+        CHECK(verification.error().failure == V::Failure::Value);
+        CHECK(verification.error().actual == 1);
+        // Read errors are not suppressed just because a mapping is empty.
+        dictionary[Key(0,0x1600,0)].value = 0;
+        preop_fault = 2; faults_left = 1; fault_key = {0,0x1a00,0};
+        CHECK(verification.prepare(config, {reinterpret_cast<ec_slave_config_t *>(1)}, error));
+        CHECK(!verification.configurePreop(reinterpret_cast<ec_master_t *>(1), 5000, log, error, 1));
+        CHECK(verification.error().check.index == 0x1a00);
+        CHECK(verification.error().failure == V::Failure::Read);
+        CHECK(verification.error().abort_code == 0x06020000);
+    }
+    return true;
+}
+
 bool unitTests() {
     Fixture f;
     std::string error;
@@ -417,6 +516,37 @@ bool unitTests() {
     return true;
 }
 
+bool readOnlyMappingTests() {
+    for (const bool change_one : {false, true}) {
+        resetFake();
+        Fixture f;
+        V v;
+        std::string error;
+        for (const auto &entry : dictionary) {
+            const auto index = std::get<1>(entry.first);
+            if (index >= 0x1600 && index <= 0x1bff && !(change_one && index == 0x1601))
+                read_only_objects.push_back(entry.first);
+        }
+        if (change_one) dictionary[Key(0,0x1601,1)].value ^= 1;
+        CHECK(v.prepare(f.config, f.handles, error));
+        std::ostringstream log;
+        CHECK(v.configurePreop(reinterpret_cast<ec_master_t *>(1), 5000, log, error));
+        unsigned int mapping_writes = 0;
+        for (const auto &write : writes) {
+            const auto &key = std::get<0>(write);
+            CHECK(std::find(read_only_objects.begin(), read_only_objects.end(), key) == read_only_objects.end());
+            const auto index = std::get<1>(key);
+            if (index >= 0x1600 && index <= 0x1bff) {
+                CHECK(change_one && index == 0x1601);
+                ++mapping_writes;
+            }
+        }
+        CHECK(mapping_writes == (change_one ? 3U : 0U));
+        CHECK(finish(v) == V::Result::Complete && !invariant_failed && rt_allocations == 0);
+    }
+    return true;
+}
+
 bool preopTests() {
     Fixture f;
     V v;
@@ -431,8 +561,8 @@ bool preopTests() {
     std::ostringstream log;
     CHECK(v.configurePreop(master,5000,log,error));
     CHECK(!v.started() && !v.complete() && read_calls == 0);
-    CHECK(uploads == correct.size() && !invariant_failed);
-    CHECK(first_slave_reads_at_second_write == 13);
+    CHECK(uploads == correct.size() + 6 && !invariant_failed);
+    CHECK(first_slave_reads_at_second_write == 19);
     for (const auto &item : correct) {
         CHECK(dictionary.at(item.first).value == item.second.value);
         CHECK(dictionary.at(item.first).size == item.second.size);
@@ -454,25 +584,29 @@ bool preopTests() {
     CHECK(std::get<0>(std::get<0>(writes[expected.size()])) == 1);
     CHECK(finish(v) == V::Result::Complete);
 
-    // Every possible readback difference is rejected and retried, even on the
-    // last object of the last slave. Successful PREOP still leaves OP gated.
+    // A mapping mismatch found in the preflight is rewritten and verified;
+    // a final assignment readback mismatch requires another attempt.
     for (const auto &item : correct) {
         resetFake(); fault_key = item.first; preop_fault = 3; faults_left = 1;
         CHECK(v.prepare(f.config,f.handles,error));
         std::ostringstream attempt_log;
         CHECK(v.configurePreop(master,5000,attempt_log,error));
         CHECK(!v.started() && !v.complete() && !invariant_failed);
-        CHECK(attempt_log.str().find("attempt=2/5") != std::string::npos);
+        const auto object = std::get<1>(item.first);
+        const bool assignment = object == 0x1c12 || object == 0x1c13;
+        CHECK(attempt_log.str().find(assignment ? "attempt=2/5" : "attempt=1/5") != std::string::npos);
         if (std::get<0>(item.first) == 1) {
             CHECK(std::count_if(writes.begin(),writes.end(),[](const auto &w) {
                 return std::get<0>(std::get<0>(w)) == 0;
-            }) == 18); // A verified earlier slave is not configured again.
+            }) == 7); // A verified earlier slave is not configured again.
         }
     }
     for (int fault = 1; fault <= 4; ++fault) {
         for (int count : {1,2,3,4,5}) {
             resetFake(); preop_fault = fault; faults_left = count;
             fault_key = {0,0x1a07,2};
+            if (fault == 3) fault_key = {0,0x1c13,1}; // Inject mismatch in final readback, not preflight.
+            if (fault == 1) dictionary[fault_key].value ^= 1; // Force a mapping write.
             CHECK(v.prepare(f.config,f.handles,error));
             std::ostringstream attempt_log;
             const bool ok = v.configurePreop(master,5000,attempt_log,error);
@@ -481,7 +615,7 @@ bool preopTests() {
             if (!ok) {
                 CHECK(second_slave_ops == 0);
                 CHECK(error.find("slave[position=0]") != std::string::npos);
-                CHECK(error.find("object=0x1a07:02") != std::string::npos);
+                CHECK(error.find(fault == 3 ? "object=0x1c13:01" : "object=0x1a07:02") != std::string::npos);
                 if (fault <= 2) CHECK(error.find("SDO abort=0x") != std::string::npos);
             }
         }
@@ -515,7 +649,7 @@ bool preopTests() {
         CHECK(v.prepare(f.config,f.handles,error));
         std::ostringstream attempt_log;
         CHECK(!v.configurePreop(master,fault == 4 ? 0 : 5,attempt_log,error));
-        CHECK(downloads == ((fault == 0 || fault == 3) ? 1U : 0U));
+        CHECK(downloads == (fault == 0 ? 1U : 0U));
         CHECK(second_slave_ops == 0 && !v.complete());
         CHECK(v.error().failure == (fault < 3 ? V::Failure::PreopState : V::Failure::PreopTimeout));
     }
@@ -523,7 +657,7 @@ bool preopTests() {
     resetFake(); transfer_delay_ns = 1000000;
     CHECK(v.prepare(f.config,f.handles,error));
     CHECK(!v.configurePreop(master,5,log,error));
-    CHECK(downloads == 5 && v.error().failure == V::Failure::PreopTimeout);
+    CHECK(downloads + uploads == 5 && v.error().failure == V::Failure::PreopTimeout);
     resetFake(); transfer_delay_ns = 1000000;
     CHECK(v.prepare(f.config,f.handles,error));
     CHECK(!v.configurePreop(master,40,log,error));
@@ -563,7 +697,7 @@ bool initCommandTests() {
         {{0,0x2002,255},UINT64_C(0x0123456789abcdef),8}, {{1,0x2003,0},7,1}};
     CHECK(writes.size() > expected.size() && std::equal(expected.begin(),expected.end(),writes.begin()));
     CHECK(std::get<0>(writes[5]) == Key(0,0x1c12,0)); // All init commands precede PDO configuration.
-    CHECK(uploads == 24); // Every PDO scalar is read, no readback of possibly write-only init objects.
+    CHECK(uploads == 38); // Mapping preflight + full readback; no uploads of init objects.
     CHECK(std::none_of(uploaded.begin(),uploaded.end(),[](const Key &k) { return std::get<1>(k) >= 0x2000; }));
     const auto downloads_before_op = downloads;
     CHECK(finish(v) == V::Result::Complete); // Activation-time PDO gate is unchanged.
@@ -577,7 +711,7 @@ bool initCommandTests() {
         return std::get<1>(std::get<0>(w)) >= 0x2000;
     }) == 5);
     CHECK(!invariant_failed);
-    resetFake(); preop_fault = 3; faults_left = 5; fault_key = {1,0x1a01,1};
+    resetFake(); preop_fault = 3; faults_left = 5; fault_key = {1,0x1c13,2};
     CHECK(v.prepare(f.config,f.handles,error));
     CHECK(!v.configurePreop(master,5000,log,error));
     CHECK(v.error().failure == V::Failure::Value && v.error().check.slave_position == 7);
@@ -607,7 +741,7 @@ bool initCommandTests() {
     resetFake(); transfer_delay_ns = 1000000;
     CHECK(v.prepare(f.config,f.handles,error));
     CHECK(!v.configurePreop(master,7,log,error));
-    CHECK(downloads == 7 && v.error().failure == V::Failure::PreopTimeout);
+    CHECK(downloads + uploads == 7 && v.error().failure == V::Failure::PreopTimeout);
     CHECK(v.error().check.field != V::Field::InitCommand);
     f.slaves[0].init_commands = nullptr;
     CHECK(!v.prepare(f.config,f.handles,error));
@@ -618,6 +752,7 @@ bool initCommandTests() {
     // LoadedSlaveConfig owns the init bytes after its source has been destroyed;
     // prepare() in turn copies them for the entire initialization lifetime.
     resetFake();
+    dictionary[Key(0,0x1a00,0)] = {0,1};
     {
         rocos::LoadedSlaveConfig loaded;
         {
@@ -642,6 +777,7 @@ bool initCommandTests() {
 bool cyclicTests() {
     // Real cyclic loop + fake transport/clock: client output must remain gated
     // even when OP and WCs are healthy throughout a failed verification.
+    for (const bool packed : {false, true}) {
     for (int scenario = 0; scenario < 10; ++scenario) {
         resetFake();
         Fixture f;
@@ -649,6 +785,8 @@ bool cyclicTests() {
         std::array<std::uint8_t,1> in{0x55}, out{0};
         rocos::EthercatMasterTestPeer::seed(master,f,in.data(),out.data());
         std::string error;
+        rocos::EcatBus bit_bus{};
+        if (packed) CHECK(rocos::EthercatMasterTestPeer::packedLayout(master, bit_bus, error));
         CHECK(master.pdoVerification().prepare(f.config,f.handles,error));
         std::ostringstream preop_log;
         CHECK(master.pdoVerification().configurePreop(
@@ -661,10 +799,14 @@ bool cyclicTests() {
         if (scenario == 7) health_fault = 2;
         if (scenario == 8) read_rc = -EIO;
         if (scenario == 9) { runtime_diagnostics = true; runtime_target = 2100; }
-        rocos::SharedMemoryConfig shared(700000 + getpid()*16 + scenario);
-        CHECK(shared.createSharedMemory() && shared.createPdDataMemoryProvider(1,1));
+        rocos::SharedMemoryConfig shared(700000 + getpid()*32 + scenario + (packed ? 16 : 0));
+        CHECK(shared.createSharedMemory() && shared.createPdDataMemoryProvider(master.sharedInputSize(), master.sharedOutputSize()));
+        if (packed) *shared.ecatBus = bit_bus;
         shared.ecatBus->slave_num = 2;
-        *static_cast<std::uint8_t *>(shared.pdOutputPtr) = 0xab;
+        if (packed) {
+            for (unsigned int bit = 0; bit < 8; ++bit)
+                shared.setSlaveOutputVarValue<std::uint8_t>(0, bit, (0xab >> bit) & 1U);
+        } else *static_cast<std::uint8_t *>(shared.pdOutputPtr) = 0xab;
         rocos::CyclicTask cyclic(master,shared,1000,scenario == 3 ? 10 : 5000);
         volatile std::sig_atomic_t stopped = 0;
         task = &cyclic; stop = &stopped; ipc = &shared; output = out.data();
@@ -677,6 +819,10 @@ bool cyclicTests() {
             CHECK(rc == 0 && cyclic.startupReady() && saw_business_output);
             CHECK(shared.ecatBus->is_authorized);
             CHECK(*static_cast<std::uint8_t *>(shared.pdInputPtr) == 0x55);
+            if (packed) {
+                for (unsigned int bit = 0; bit < 8; ++bit)
+                    CHECK(shared.getSlaveInputVarValue<std::uint8_t>(0, bit) == ((0x55 >> bit) & 1U));
+            }
             CHECK(sem_trywait(shared.sem_mutex[0]) == 0);
             if (scenario == 9) {
                 CHECK(report_count == 2 && unauthorized_cycles == 15);
@@ -706,6 +852,10 @@ bool cyclicTests() {
         } else {
             CHECK(rc != 0 && !cyclic.startupReady() && !saw_business_output);
             CHECK(out[0] == 0 && !shared.ecatBus->is_authorized);
+            if (packed) {
+                for (unsigned int bit = 0; bit < 8; ++bit)
+                    CHECK(shared.getSlaveInputVarValue<std::uint8_t>(0, bit) == 0);
+            }
             CHECK(sem_trywait(shared.sem_mutex[0]) == -1 && errno == EAGAIN);
             const std::array<V::Failure,8> failures{V::Failure::Value,V::Failure::RequestTimeout,
                 V::Failure::StartupTimeout,V::Failure::BusUnhealthy,V::Failure::Read,
@@ -715,7 +865,8 @@ bool cyclicTests() {
         }
         task = nullptr; stop = nullptr; ipc = nullptr; output = nullptr;
     }
+    }
     return true;
 }
 }
-int main() { return unitTests() && preopTests() && initCommandTests() && cyclicTests() ? 0 : 1; }
+int main() { return emptyMappingTests() && unitTests() && readOnlyMappingTests() && preopTests() && initCommandTests() && cyclicTests() ? 0 : 1; }

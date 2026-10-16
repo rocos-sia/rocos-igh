@@ -332,12 +332,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         master_.receiveAndProcess();
         if (clock_gettime(CLOCK_MONOTONIC, &receive_end) != 0) return errno;
 
-        copyProcessData(master_.inputData(),
-                        master_.inputSize(),
-                        ipc_.pdInputPtr,
-                        ipc_.pdOutputPtr,
-                        master_.outputData(),
-                        master_.outputSize());
+        master_.exchangeProcessData(ipc_.pdInputPtr, ipc_.pdOutputPtr);
         if (clock_gettime(CLOCK_MONOTONIC, &pdo_end) != 0) return errno;
 
         const BusState state = master_.readState();
