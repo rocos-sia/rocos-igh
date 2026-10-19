@@ -7,6 +7,8 @@
 
 # rocos-igh
 
+<img src="rocos-igh.png" alt="ROCOS IGH logo" width="267">
+
 Minimal C++ EtherCAT master shell built on IgH EtherCAT Master, with shared-memory IPC for client processes.
 
 The build requires yaml-cpp (`libyaml-cpp-dev` on Debian/Ubuntu). Master-enabled
