@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-project(rocos_igh VERSION 0.1.0 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ROCOS_IGH_VERSION)
+string(STRIP "${ROCOS_IGH_VERSION}" ROCOS_IGH_VERSION)
+if(NOT ROCOS_IGH_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-rc\\.[1-9][0-9]*)?$")
+	message(FATAL_ERROR "VERSION must be X.Y.Z or X.Y.Z-rc.N (N >= 1), without leading zeroes")
+endif()
+# CMake project(VERSION) accepts only the numeric core; retain the full version above.
+set(ROCOS_IGH_VERSION_CORE "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+project(rocos_igh VERSION "${ROCOS_IGH_VERSION_CORE}" LANGUAGES CXX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 
 option(ROCOS_IGH_BUILD_MASTER "Build the IgH master executable" ON)  # default ON: requires ecrt.h and libethercat
 option(ROCOS_IGH_BUILD_HARDWARE_TESTS "Enable tests requiring EtherCAT hardware" OFF)
