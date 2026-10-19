@@ -11,6 +11,35 @@ Minimal C++ EtherCAT master shell built on IgH EtherCAT Master, with shared-memo
 
 The build requires yaml-cpp (`libyaml-cpp-dev` on Debian/Ubuntu). Master-enabled
 builds additionally require the IgH `ecrt.h` header and `libethercat` library.
+The master executable is enabled by default (`ROCOS_IGH_BUILD_MASTER=ON`).
+
+## Quick build with presets
+
+With CMake 3.20 or newer and Make installed, run from the repository root:
+
+```bash
+# Debug: configure, build, and test
+cmake --preset debug
+cmake --build --preset debug --parallel
+ctest --preset debug
+
+# Release: configure, build, and test
+cmake --preset release
+cmake --build --preset release --parallel
+ctest --preset release
+```
+
+`cmake --preset` configures the build; `cmake --build --preset` compiles it.
+Both presets enable the master executable and tests, and keep hardware integration
+tests disabled. The executables are `build/debug/rocos_igh_master` and
+`build/release/rocos_igh_master`, respectively. Building does not require connected
+EtherCAT hardware, but does require the IgH development files. For a nonstandard
+IgH installation, set `ETHERCAT_ROOT` to its installation prefix before configuring.
+
+To configure without IgH, use `cmake --preset debug -DROCOS_IGH_BUILD_MASTER=OFF`
+(or `release`), then use the same build and test commands. Running the configure
+preset again without this override re-enables the master. The explicit-directory
+commands below remain available with CMake 3.16 or newer.
 
 ## Build and test (hardware-free)
 
