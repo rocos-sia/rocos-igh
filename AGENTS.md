@@ -39,7 +39,7 @@
 
 ## 版本与 Git 提交
 
-- 每次准备创建 Git 提交或发布版本时，必须先读取并执行项目技能 [rocos-version](skills/rocos-version/SKILL.md)。包括文档、配置、测试和构建修改；仅编辑文件时不递增版本，不因本规则自行创建提交。
+- 每次准备创建 Git 提交或发布版本时，必须先读取并执行项目技能 [rocos-version](.agents/skills/rocos-version/SKILL.md)。包括文档、配置、测试和构建修改；仅编辑文件时不递增版本，不因本规则自行创建提交。
 - 根目录 `VERSION` 是项目版本号的唯一来源；CMake 从中读取完整版本和数字核心。PDO YAML 的 `version: 1` 是配置格式版本，不随项目版本更新。
 - 根据兼容性确定 patch/minor/major；根据用户明确指令确定内部测试或正式发布。指令未明确渠道时，先给出兼容性判断与候选版本，再询问用户；已有适用指令时不重复询问。
 - 每次新提交必须包含版本更新。内部测试使用 `X.Y.Z-rc.N`；正式 patch/minor/major 发布使用 `X.Y.Z`，提交成功后在该提交创建 `vX.Y.Z` Git tag。具体递增、校验和重试规则见技能。
