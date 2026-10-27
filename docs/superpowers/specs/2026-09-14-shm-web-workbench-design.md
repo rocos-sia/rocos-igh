@@ -1,5 +1,7 @@
 # Shared Memory Web Workbench Design
 
+> Migration note: `tools/shm_web` now lives in the [rocos-shm repository](https://github.com/rocos-sia/rocos-shm/tree/main/tools/shm_web). Paths below describe the original implementation in rocos-igh.
+
 ## Goal
 
 Refresh `tools/shm_web/index.html` as a compact engineering workbench inspired by the visual language of robotsfan viewer. The interface should feel technical and precise, use gray as its dominant surface color, and reserve blue for interactive controls and active states.

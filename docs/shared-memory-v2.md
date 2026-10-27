@@ -8,7 +8,10 @@
 ## 构建和部署
 
 先运行 `git submodule update --init --recursive`，再按 README 构建。主站、无硬件
-测试和独立 Web 工具都链接 `rocos::shm`。`src/shared_memory_config.hpp` 仅转发到
+测试和独立 Web 工具都链接 `rocos::shm`。Web 工具已迁至
+[`rocos-shm/tools/shm_web`](https://github.com/rocos-sia/rocos-shm/tree/main/tools/shm_web)，
+由 ECM 与 IgH 共用；在独立 `rocos-shm` 工作区构建，本仓库不再保留副本。
+上述固定子模块提交早于工具迁移，仍用于提供匹配的 ABI v2 公共头文件。`src/shared_memory_config.hpp` 仅转发到
 公共库，不再复制结构或生命周期实现；旧 `EcatConfigMaster`/`EcatConfig` 别名保留。
 
 IPC 名称为 `/ecm_v2_{id}`、`/pd_input_v2_{id}`、`/pd_output_v2_{id}`、
@@ -85,6 +88,6 @@ ABI v2 按规范拒绝非字节对齐 PDO。YAML 非整字节位宽直接报错�
 重复等待、字节 PDO 边界、统计复位确认、静态身份及诊断有效位。模拟 IgH/时钟
 测试继续检查启动输出门禁、异常计数、周期超时和周期内零动态分配。
 
-Web 工具后端测试检查真实模式拒绝输出写入、演示模式边界和 HTTP 行为；前端测试
+以下 Web 测试现由 `rocos-shm` 仓库维护：后端测试检查真实模式拒绝输出写入、演示模式边界和 HTTP 行为；前端测试
 检查只读交互与按有效位显示从站状态。硬件验收仍需验证实际身份/固件、掉站、
 DC 偏差及新诊断调用对 1 ms 周期抖动的影响；离线通过不能替代实机验收。

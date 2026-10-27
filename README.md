@@ -19,7 +19,7 @@ The master executable is enabled by default (`ROCOS_IGH_BUILD_MASTER=ON`).
 
 The shared ABI and IPC implementation come from the pinned Git submodule
 [`rocos-shm`](3rdparty/rocos-shm) (`87c436c49777834964a5f1a38d46b4e0c74d34b2`, package 2.0.0 / ABI 2).
-Initialize it before either the master or Web viewer build:
+Initialize it before building the master or tests:
 
 ```bash
 git submodule update --init --recursive
@@ -28,6 +28,21 @@ git submodule update --init --recursive
 `src/shared_memory_config.hpp` is a compatibility include only; consumers link
 `rocos::shm`. See [the migration and capability contract](docs/shared-memory-v2.md).
 All masters, Apps and monitors must be rebuilt together. Old binaries cannot connect.
+
+The shared Web monitor now lives in
+[`rocos-shm/tools/shm_web`](https://github.com/rocos-sia/rocos-shm/tree/main/tools/shm_web)
+for use by both ECM and IgH. Build it in a separate `rocos-shm` checkout; this
+repository no longer keeps a copy. From that checkout:
+
+```bash
+cmake -S tools/shm_web -B tools/shm_web/build
+cmake --build tools/shm_web/build
+./tools/shm_web/build/shm_web_server --master-id 0 --port 8484
+```
+
+Use the same master ID as the running IgH process, then open `http://127.0.0.1:8484`.
+The pinned library revision above predates the tool migration; it still supplies
+the matching ABI v2 headers but does not contain the Web tool.
 
 **TC7 配置限制：** `config/tc7_pdo.yaml` 的第 8 个从站含 1-bit GPIO，当前 v2
 规范要求拒绝非字节对齐 PDO，因此此配置会在加载时失败。保留设备真实位宽，不能

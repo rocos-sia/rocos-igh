@@ -1,5 +1,7 @@
 # Shared-memory Viewer Typed Values Implementation Plan
 
+> Migration note: `tools/shm_web` now lives in the [rocos-shm repository](https://github.com/rocos-sia/rocos-shm/tree/main/tools/shm_web). Paths below describe the original implementation in rocos-igh.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a per-PDO data-type selector that decodes live little-endian bytes as the selected compatible integer or float type.

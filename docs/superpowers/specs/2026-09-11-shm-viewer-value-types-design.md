@@ -1,5 +1,7 @@
 # Shared-memory viewer typed values
 
+> Migration note: `tools/shm_web` now lives in the [rocos-shm repository](https://github.com/rocos-sia/rocos-shm/tree/main/tools/shm_web). Paths below describe the original implementation in rocos-igh.
+
 ## Scope
 
 Add a data-type selector after the live-value column for every PDO variable in
