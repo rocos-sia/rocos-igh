@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
 
     // —— 第五步：创建共享内存 IPC（总线快照 + PDO 缓冲区）——
     rocos::SharedMemoryConfig ipc(static_cast<int>(options.master_id)); // 按 master_id 隔离命名
-    if (!ipc.createSharedMemory()) { // 创建 ecm{id} 总线共享内存与信号量
+    if (!ipc.createSharedMemory()) { // 创建 ABI v2 总线共享内存与信号量
         std::cerr << "failed to create shared memory" << '\n';
         return EXIT_FAILURE;
     }
@@ -239,10 +239,20 @@ int main(int argc, char **argv) {
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
-    ipc.ecatBus->dt = options.period_us;          // 发布控制周期（微秒）
-    ipc.ecatBus->current_state = ECAT_STATE_INIT; // 初始总线状态
-    ipc.ecatBus->is_authorized = false;           // 尚未完成健康检查
-    ipc.ecatBus->timestamp = 0;                   // 时间戳清零
+    if (!master.publishIdentity(*ipc.ecatBus)) {
+        std::cerr << "failed to publish slave identity" << '\n';
+        return EXIT_FAILURE;
+    }
+    static_assert(sizeof(ROCOS_IGH_VERSION) <= sizeof(ipc.ecatBus->ecm_version));
+    std::strcpy(ipc.ecatBus->ecm_version, ROCOS_IGH_VERSION);
+    ipc.ecatBus->backend_type = 2U;
+    ipc.ecatBus->supported_cmds = 1U << rocos::CMD_RESET_STATS;
+    ipc.ecatBus->state_control_supported = 0U;
+    ipc.ecatBus->dt = options.period_us;
+    ipc.ecatBus->current_state = 0; // IgH al_states is a set, not one master state.
+    ipc.ecatBus->is_authorized = true;
+    ipc.ecatBus->dc_sync_status = options.dc_enabled ? 4U : 0U;
+    // DC deviation/lock and firmware are unavailable: leave their validity unset.
 
     // Start the reporter before SCHED_FIFO/mlockall; only this normal-priority
     // thread formats startup progress. The cyclic path publishes lock-free data.
@@ -255,6 +265,14 @@ int main(int argc, char **argv) {
             bool ready_announced = false;
             for (;;) {
                 const bool stopped = reporter_stop.load();
+                if (!stopped) {
+                    ipc.processCommand([&](const rocos::AsyncCommandBox &request,
+                                           rocos::AsyncCommandBox &) -> std::int32_t {
+                        if (request.cmd_type != rocos::CMD_RESET_STATS) return rocos::UNSUPPORTED;
+                        if (!cyclic_task.startupReady()) return rocos::STATE_MISMATCH;
+                        return cyclic_task.statisticsReset().execute(request.deadline_mono_ns, reporter_stop);
+                    });
+                }
                 const bool ready = cyclic_task.startupReady();
                 if (ready && !ready_announced) {
                     std::cout << "[master " << options.master_id
@@ -290,8 +308,17 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    // Only expose the initialized ABI after the non-RT command worker exists.
+    if (!ipc.publishReady()) {
+        reporter_stop.store(true);
+        reporter.join();
+        std::cerr << "failed to publish shared memory: " << ipc.lastError() << '\n';
+        return EXIT_FAILURE;
+    }
+
     // —— 第七步：配置实时环境（锁内存、预触碰、SCHED_FIFO）——
     if (!configureRealtime(options, error)) {
+        rocos::atomicStore(ipc.header->ready, 0U);
         reporter_stop.store(true);
         reporter.join();
         std::cerr << error << '\n';
@@ -300,6 +327,7 @@ int main(int argc, char **argv) {
 
     // —— 第八步：运行周期任务直到收到停止信号 ——
     const int run_result = cyclic_task.run(g_stop_requested);      // 阻塞运行，直到停止标志置位
+    rocos::atomicStore(ipc.header->ready, 0U);
     reporter_stop.store(true);
     reporter.join();
     printFinalStatistics(cyclic_task.statistics(), run_result);    // 循环结束后输出统计

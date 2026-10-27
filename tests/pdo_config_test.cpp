@@ -485,12 +485,9 @@ bool testRejectsInvalidDistributedClockConfig() {
             CHECK(config.slaves[i].dc->reference == (i == 0));
         }
     }
-    CHECK(rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/tc7_pdo.yaml", config, error));
-    CHECK(error.empty());
-    CHECK(config.slaves.size() == 8U);
-    // Discovery may have populated this operational configuration on startup.
-    CHECK(config.slaves[7].rx_pdos[0].index == 0x1600);
-    CHECK(config.slaves[7].tx_pdos[0].index == 0x1a00);
+    // The checked-in TC7 GPIO contains real 1-bit objects; never silently widen them.
+    CHECK(!rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/tc7_pdo.yaml", config, error));
+    CHECK(error.find("byte-aligned") != std::string::npos);
     return true;
   }
 

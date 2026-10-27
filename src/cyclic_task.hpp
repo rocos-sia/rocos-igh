@@ -7,6 +7,7 @@
 #include <ctime>
 
 #include "runtime_report.hpp"
+#include "statistics_reset.hpp"
 
 namespace rocos {
 
@@ -26,6 +27,10 @@ struct CycleStatistics {
     double average_us{0.0};             ///< Running average cycle duration [us].
     double current_us{0.0};             ///< Most recent cycle duration [us].
 };
+
+// Called at the RT cycle boundary; publishes cleared timing before acknowledging.
+bool applyStatisticsReset(StatisticsReset &reset, CycleStatistics &statistics,
+                          EcatBus &bus) noexcept;
 
 /**
  * @brief Copies one cycle of process data between the EtherCAT domains and shared memory.
@@ -71,13 +76,13 @@ timespec advanceDeadline(const timespec &previous_deadline,
  * @param state                  Bus/domain state snapshot for this cycle.
  * @param statistics             Running cycle statistics (updated in place).
  * @param period_us              Configured cycle period in microseconds.
- * @param monotonic_timestamp_us Monotonic wake timestamp in microseconds.
+ * @param wall_timestamp_us      Unix wall-clock timestamp in microseconds.
  * @param bus                    Shared EcatBus to update.
  */
 void updateSharedBus(const BusState &state,
                      CycleStatistics &statistics,
                      std::uint32_t period_us,
-                     long monotonic_timestamp_us,
+                     long wall_timestamp_us,
                      EcatBus &bus) noexcept;
 
 /**
@@ -113,6 +118,7 @@ public:
 
     std::uint64_t startupOpMask() const noexcept { return startup_op_mask_.load(); }
     bool startupReady() const noexcept { return startup_ready_.load(); }
+    StatisticsReset &statisticsReset() noexcept { return statistics_reset_; }
 
 private:
     EthercatMaster &master_;
@@ -120,6 +126,7 @@ private:
     std::uint32_t period_us_;
     std::uint32_t op_timeout_ms_;
     CycleStatistics statistics_{};
+    StatisticsReset statistics_reset_;
     RuntimeReportMailbox reports_;
     std::atomic<std::uint64_t> startup_op_mask_{0};
     std::atomic<bool> startup_ready_{false};

@@ -299,6 +299,9 @@ std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
             entry.bit_length = static_cast<std::uint8_t>(parseUnsigned(
                 requireNode(entry_node, "bit_length", entry_path),
                 entry_path + ".bit_length", std::numeric_limits<std::uint8_t>::max()));
+            if (entry.bit_length % 8U != 0U) {
+                throw std::runtime_error(entry_path + ".bit_length: ABI v2 requires byte-aligned PDO entries");
+            }
             if (entry.bit_length == 0U) {
                 throw std::runtime_error(entry_path +
                                          ".bit_length must be between 1 and 255");

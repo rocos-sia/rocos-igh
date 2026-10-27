@@ -1,11 +1,10 @@
 #pragma once
 
 #include "slave_config.hpp"
-#include <vector>
 
 namespace rocos {
 // Built once before the cyclic thread starts. Byte-aligned entries retain their
-// domain offsets; bit entries get separate byte slots after the raw domain image.
+// domain offsets; ABI v2 rejects bit entries.
 class ProcessDataLayout {
 public:
     bool build(StaticSlaveConfig config, std::size_t input_domain_size,
@@ -17,11 +16,6 @@ public:
     void reset() noexcept;
 
 private:
-    struct Transfer {
-        std::size_t domain_offset, shared_offset;
-        unsigned int bit_position, bit_length;
-    };
-    std::vector<Transfer> inputs_, outputs_;
     std::size_t input_size_{0}, output_size_{0};
 };
 } // namespace rocos

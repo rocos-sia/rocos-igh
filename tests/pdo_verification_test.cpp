@@ -292,12 +292,12 @@ extern "C" int __wrap_ecrt_master_send(ec_master_t *) {
         if (!task->startupReady()) {
             int value = 0;
             sem_getvalue(ipc->sem_mutex[0], &value);
-            if (*output != 0 || value != 0 || ipc->ecatBus->is_authorized ||
+            if (*output != 0 || value != 0 ||
                 *static_cast<std::uint8_t *>(ipc->pdInputPtr) != 0) invariant_failed = true;
         } else {
             saw_business_output = *output == 0xab;
             if (runtime_diagnostics) {
-                if (!ipc->ecatBus->is_authorized) ++unauthorized_cycles;
+                if (!rocos::atomicLoad(ipc->ecatBus->link_up) || rocos::atomicLoad(ipc->ecatBus->wc_state) != 1) ++unauthorized_cycles;
                 now_ns += runtime_sends == 0 ? 2300000 : 30000;
                 rocos::RuntimeReport report;
                 if (task->takeReport(report)) {
@@ -786,7 +786,11 @@ bool cyclicTests() {
         rocos::EthercatMasterTestPeer::seed(master,f,in.data(),out.data());
         std::string error;
         rocos::EcatBus bit_bus{};
-        if (packed) CHECK(rocos::EthercatMasterTestPeer::packedLayout(master, bit_bus, error));
+        if (packed) {
+            CHECK(!rocos::EthercatMasterTestPeer::packedLayout(master, bit_bus, error));
+            CHECK(error.find("byte-aligned") != std::string::npos);
+            continue;
+        }
         CHECK(master.pdoVerification().prepare(f.config,f.handles,error));
         std::ostringstream preop_log;
         CHECK(master.pdoVerification().configurePreop(
@@ -851,7 +855,7 @@ bool cyclicTests() {
             }
         } else {
             CHECK(rc != 0 && !cyclic.startupReady() && !saw_business_output);
-            CHECK(out[0] == 0 && !shared.ecatBus->is_authorized);
+            CHECK(out[0] == 0 && shared.ecatBus->is_authorized);
             if (packed) {
                 for (unsigned int bit = 0; bit < 8; ++bit)
                     CHECK(shared.getSlaveInputVarValue<std::uint8_t>(0, bit) == 0);

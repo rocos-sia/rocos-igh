@@ -2,7 +2,7 @@
 // shm_web_server.cpp —— rocos_igh 共享内存观察器（Web 后端）
 // -----------------------------------------------------------------------------
 // 一个零依赖的静态 HTTP 服务器，复用 SharedMemoryConfig 的客户端路径连接到
-// 主站进程创建的 POSIX 共享内存（ecm{id} / pd_input{id} / pd_output{id}），
+// 主站进程创建的 POSIX 共享内存（ecm_v2_{id} / pd_input_v2_{id} / pd_output_v2_{id}），
 // 把总线快照与 PDO 变量值以 JSON 形式暴露给浏览器前端，并用 Server-Sent
 // Events 周期性推送，实现"动态显示"。
 //
@@ -17,7 +17,7 @@
 //   GET /              前端页面（index.html，从可执行文件旁加载）
 //   GET /api/snapshot  当前共享内存快照（JSON）
 //   GET /api/events    SSE 流，周期推送快照
-//   POST /api/output   校验后单次写入 OUT PDO
+//   POST /api/output   仅演示模式校验后单次写入 OUT PDO
 // =============================================================================
 
 #include "shared_memory_config.hpp"
@@ -73,8 +73,8 @@ struct AppState {
     bool connected = false;
 
     std::chrono::steady_clock::time_point last_attempt{};  // 上次尝试连接时刻
-    long last_ts     = 0;                                  // 上一次观察到的时间戳
-    std::chrono::steady_clock::time_point last_seen_ts{};  // 上次看到时间戳更新的时刻
+    std::uint64_t last_ts = 0;                            // 上一次观察到的单调心跳
+    std::chrono::steady_clock::time_point last_seen_ts{};  // 上次看到心跳更新的时刻
 };
 
 // -----------------------------------------------------------------------------
@@ -213,20 +213,7 @@ void populateDemoBus(EcatBus &bus) {
     slave.input_var_num  = in_count;
 }
 
-// 清理指定 master_id 可能残留的共享内存/信号量（demo 启动前调用，幂等）。
-void cleanupShmResiduals(int id) {
-    char name[64];
-    std::snprintf(name, sizeof name, "/ecm%d", id);      shm_unlink(name);
-    std::snprintf(name, sizeof name, "/pd_input%d", id); shm_unlink(name);
-    std::snprintf(name, sizeof name, "/pd_output%d", id); shm_unlink(name);
-    for (int i = 0; i < EC_SEM_NUM; ++i) {
-        std::snprintf(name, sizeof name, "/sync%d_%d", id, i);
-        sem_unlink(name);
-    }
-}
-
 bool createDemoMemory(AppState &st, std::string &why) {
-    cleanupShmResiduals(st.master_id);  // 清理上次异常退出的残留
     try {
         st.cfg = std::make_unique<SharedMemoryConfig>(st.master_id);
     } catch (const std::exception &) {
@@ -236,6 +223,7 @@ bool createDemoMemory(AppState &st, std::string &why) {
     if (!st.cfg->createSharedMemory()) { why = "createSharedMemory failed"; return false; }
     if (!st.cfg->createPdDataMemoryProvider(18, 13)) { why = "createPdDataMemoryProvider failed"; return false; }
     populateDemoBus(*st.cfg->ecatBus);
+    if (!st.cfg->publishReady()) { why = st.cfg->lastError(); return false; }
     return true;
 }
 
@@ -246,11 +234,14 @@ void animateDemo(AppState &st) {
     ++n;
 
     // 模拟主站运行：时间戳递增 + 周期统计。
-    bus->timestamp = n;
-    bus->current_cycle_time = 1000.0;
-    bus->min_cycle_time = 980.0;
-    bus->max_cycle_time = 1120.0;
-    bus->avg_cycle_time = 1002.0;
+    timespec wall{};
+    clock_gettime(CLOCK_REALTIME, &wall);
+    rocos::atomicStore(bus->timestamp, wall.tv_sec * 1000000L + wall.tv_nsec / 1000L);
+    rocos::atomicStore(bus->heartbeat_mono_ns, rocos::monotonicNs());
+    rocos::atomicStore(bus->current_cycle_time, 1000.0);
+    rocos::atomicStore(bus->min_cycle_time, 980.0);
+    rocos::atomicStore(bus->max_cycle_time, 1120.0);
+    rocos::atomicStore(bus->avg_cycle_time, 1002.0);
 
     auto *in  = static_cast<unsigned char *>(st.cfg->pdInputPtr);
     auto *out = static_cast<unsigned char *>(st.cfg->pdOutputPtr);
@@ -311,16 +302,19 @@ std::string renderSnapshot(AppState &st) {
             st.connected = true;
         } else if (since_last.count() >= kReconnectMs) {
             st.last_attempt = now;
-            if (st.cfg && st.cfg->getSharedMemory() && st.cfg->getPdDataMemoryProvider()) {
+            if (st.cfg && st.cfg->connect(true)) {
                 st.connected = true;
-                st.last_ts = st.cfg->ecatBus->timestamp;
+                st.last_ts = rocos::atomicLoad(st.cfg->ecatBus->heartbeat_mono_ns);
                 st.last_seen_ts = now;
             }
         }
     } else if (!st.demo && st.cfg && st.cfg->ecatBus != nullptr) {
-        // 存活检测：时间戳长时间没变，判定主站已退出，丢弃映射以便重连。
-        if (st.cfg->ecatBus->timestamp != st.last_ts) {
-            st.last_ts = st.cfg->ecatBus->timestamp;
+        // 存活检测：单调心跳长时间没变，判定主站已退出，丢弃映射以便重连。
+        if (rocos::atomicLoad(st.cfg->header->ready) != 1U) {
+            st.cfg.reset();
+            st.connected = false;
+        } else if (rocos::atomicLoad(st.cfg->ecatBus->heartbeat_mono_ns) != st.last_ts) {
+            st.last_ts = rocos::atomicLoad(st.cfg->ecatBus->heartbeat_mono_ns);
             st.last_seen_ts = now;
         } else if (std::chrono::duration_cast<std::chrono::milliseconds>(now - st.last_seen_ts).count() > kStaleMs) {
             st.cfg.reset();
@@ -343,26 +337,50 @@ std::string renderSnapshot(AppState &st) {
       << "\"master_id\":" << st.master_id << ","
       << "\"available\":true,"
       << "\"demo\":" << (st.demo ? "true" : "false") << ","
-      << "\"timestamp\":" << bus->timestamp << ","
-      << "\"dt\":" << bus->dt << ","
-      << "\"current_state\":" << bus->current_state << ","
-      << "\"current_state_name\":\"" << stateName(bus->current_state) << "\","
-      << "\"request_state\":" << bus->request_state << ","
-      << "\"next_expected_state\":" << bus->next_expected_state << ","
-      << "\"is_authorized\":" << (bus->is_authorized ? "true" : "false") << ","
-      << "\"resetCycleTime\":" << (bus->resetCycleTime ? "true" : "false") << ","
-      << "\"cycle\":{\"min\":" << bus->min_cycle_time
-      << ",\"max\":" << bus->max_cycle_time
-      << ",\"avg\":" << bus->avg_cycle_time
-      << ",\"current\":" << bus->current_cycle_time << "},"
+      << "\"read_only\":" << (st.demo ? "false" : "true") << ","
+      << "\"backend_type\":" << bus->backend_type << ","
+      << "\"ecm_version\":\"" << jsonEscape(cstr(bus->ecm_version, sizeof(bus->ecm_version))) << "\","
+      << "\"heartbeat_mono_ns\":" << rocos::atomicLoad(bus->heartbeat_mono_ns) << ","
+      << "\"connected_slave_num\":" << rocos::atomicLoad(bus->connected_slave_num) << ","
+      << "\"link_up\":" << rocos::atomicLoad(bus->link_up) << ","
+      << "\"wc_state\":" << rocos::atomicLoad(bus->wc_state) << ","
+      << "\"status_valid\":" << rocos::atomicLoad(bus->status_valid) << ","
+      << "\"state_control_supported\":" << bus->state_control_supported << ","
+      << "\"supported_cmds\":" << bus->supported_cmds << ","
+      << "\"dc_sync_status\":" << rocos::atomicLoad(bus->dc_sync_status) << ","
+      << "\"dc_metric_kind\":" << rocos::atomicLoad(bus->dc_metric_kind) << ","
+      << "\"dc_diff_ns\":" << rocos::atomicLoad(bus->dc_diff_ns) << ","
+      << "\"dc_sample_mono_ns\":" << rocos::atomicLoad(bus->dc_sample_mono_ns) << ","
+      << "\"timestamp\":" << rocos::atomicLoad(bus->timestamp) << ","
+      << "\"dt\":" << rocos::atomicLoad(bus->dt) << ","
+      << "\"current_state\":" << rocos::atomicLoad(bus->current_state) << ","
+      << "\"current_state_name\":\"" << stateName(rocos::atomicLoad(bus->current_state)) << "\","
+      << "\"request_state\":" << rocos::atomicLoad(bus->request_state) << ","
+      << "\"next_expected_state\":" << rocos::atomicLoad(bus->next_expected_state) << ","
+      << "\"is_authorized\":" << (rocos::atomicLoad(bus->is_authorized) ? "true" : "false") << ","
+      << "\"resetCycleTime\":" << (rocos::atomicLoad(bus->resetCycleTime) ? "true" : "false") << ","
+      << "\"cycle\":{\"min\":" << rocos::atomicLoad(bus->min_cycle_time)
+      << ",\"max\":" << rocos::atomicLoad(bus->max_cycle_time)
+      << ",\"avg\":" << rocos::atomicLoad(bus->avg_cycle_time)
+      << ",\"current\":" << rocos::atomicLoad(bus->current_cycle_time) << "},"
       << "\"slave_num\":" << bus->slave_num << ","
       << "\"slaves\":[";
 
     for (int s = 0; s < static_cast<int>(bus->slave_num) && s < MAX_SLAVE_NUM; ++s) {
-        const Slave &slave = bus->slaves[s];
+        const Slave slave = st.cfg->getSlave(s);
         if (s != 0) o << ",";
         o << "{\"id\":" << slave.id
           << ",\"name\":\"" << jsonEscape(cstr(slave.name, MAX_SLAVE_NAME_LEN)) << "\""
+          << ",\"online\":" << slave.online
+          << ",\"al_state\":" << slave.al_state
+          << ",\"runtime_valid\":" << slave.runtime_valid
+          << ",\"vendor_id\":" << slave.vendor_id
+          << ",\"product_code\":" << slave.product_code
+          << ",\"revision_number\":" << slave.revision_number
+          << ",\"serial_number\":" << slave.serial_number
+          << ",\"info_valid\":" << slave.info_valid
+          << ",\"identity_source\":" << slave.identity_source
+          << ",\"firmware_version\":\"" << jsonEscape(cstr(slave.firmware_version, sizeof(slave.firmware_version))) << "\""
           << ",\"input_var_num\":" << slave.input_var_num
           << ",\"output_var_num\":" << slave.output_var_num
           << ",\"input_vars\":[";
@@ -451,6 +469,7 @@ bool parseUnsigned(const std::string &text, unsigned int &value) {
 }
 
 std::string writeOutput(AppState &st, const std::string &body) {
+    if (!st.demo) return "ABI v2 监控只读；输出由唯一可写 App 控制";
     // Wire format: master slave index(decimal) subindex offset size hexbytes.
     std::istringstream input(body);
     std::array<unsigned int, 6> fields{};

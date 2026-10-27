@@ -30,6 +30,10 @@ struct EthercatMasterTestPeer {
     }
     static void seed(EthercatMaster &master) {
         master.initialized_ = true;
+        master.slave_identities_.resize(2);
+        master.slave_identities_[0].vendor_id = 0x1234;
+        master.slave_identities_[0].product_code = 0x5678;
+        master.slave_identities_[0].revision_number = 0x0102;
         master.slave_configs_ = {reinterpret_cast<ec_slave_config_t *>(1),
                                  reinterpret_cast<ec_slave_config_t *>(2)};
     }
@@ -109,6 +113,22 @@ int main() {
     CHECK(master.pollSlaves(EC_AL_STATE_OP, ready, snapshot, 1) == -EIO);
     CHECK(snapshot[1]);
 
+    rocos::EcatBus metadata{};
+    metadata.slave_num = 2;
+    CHECK(master.publishIdentity(metadata));
+    CHECK(metadata.slaves[0].vendor_id == 0x1234 && metadata.slaves[0].product_code == 0x5678);
+    CHECK(metadata.slaves[0].revision_number == 0x0102);
+    CHECK(metadata.slaves[0].serial_number == 0 && metadata.slaves[0].info_valid == 0x0f);
+    CHECK(metadata.slaves[0].identity_source == 1 && metadata.slaves[0].firmware_version[0] == 0);
+    master.publishSlaveRuntime(metadata);
+    CHECK(metadata.slaves[0].online == 1 && metadata.slaves[0].al_state == EC_AL_STATE_OP);
+    CHECK(metadata.slaves[0].runtime_valid == 3); // AL status code unavailable.
+    CHECK(metadata.slaves[1].runtime_valid == 0); // Query error must not look healthy.
+    states[0].online = 0;
+    master.publishSlaveRuntime(metadata);
+    CHECK(metadata.slaves[0].online == 0 && metadata.slaves[0].al_state == 0);
+    CHECK(metadata.slaves[0].runtime_valid == 1);
+
     // PREOP must be simultaneous, error-free, and stable before configuration.
     rocos::SlaveSpec slaves[2]{};
     slaves[1].position = 1;
@@ -144,28 +164,29 @@ int main() {
     CHECK(rocos::EthercatMasterTestPeer::waitPreop(
         config, error, slow_query, fake_wait, 100, [&] { return elapsed_ms >= 71; }));
 
-    // Complete WCs alone must not mark a SAFEOP/mixed-state bus healthy.
+    // The license is independent of bus health; report health in v2 diagnostics.
     rocos::CycleStatistics statistics{};
     rocos::EcatBus bus{};
     bus.slave_num = 2;
     rocos::BusState state{};
+    state.status_valid = 7U;
     state.link_up = true;
     state.responding_slaves = 2;
     state.input_wc_state = EC_WC_COMPLETE;
     state.output_wc_state = EC_WC_COMPLETE;
     state.al_states = EC_AL_STATE_OP;
     rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(bus.is_authorized);
+    CHECK(bus.is_authorized && bus.current_state == 0 && bus.wc_state == 1);
     state.al_states = EC_AL_STATE_OP | EC_AL_STATE_SAFEOP;
     rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(!bus.is_authorized);
+    CHECK(bus.is_authorized && bus.current_state == 0);
     state.al_states = EC_AL_STATE_OP;
     state.output_wc_state = EC_WC_INCOMPLETE;
     rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(!bus.is_authorized);
+    CHECK(bus.is_authorized && bus.wc_state == 2);
     state.output_wc_state = EC_WC_COMPLETE;
     state.link_up = false;
     rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(!bus.is_authorized);
+    CHECK(bus.is_authorized && bus.link_up == 0 && bus.status_valid == 7);
     return 0;
 }

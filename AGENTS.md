@@ -4,7 +4,7 @@
 
 - 本仓库实现基于 IgH EtherCAT Master 的 C++ 主站应用，目标周期下限为 1 ms。
 - 主站负责周期性 PDO 收发，并通过 POSIX 共享内存和命名信号量向客户端发布数据、接收输出。
-- 所有主站相关对象都以同一个非负 `master_id` 隔离；IgH 主站 0/1 分别对应共享内存 `ecm0`/`ecm1`。
+- 所有主站相关对象都以同一个非负 `master_id` 隔离；IgH 主站 0/1 分别对应共享内存 `ecm_v2_0`/`ecm_v2_1`。
 
 ## 当前状态
 
@@ -17,10 +17,12 @@
 
 - IgH 配置必须在激活前完成；周期线程遵循 `receive -> domain_process -> 读写 PDO -> domain_queue -> send`。API 阶段和实时安全要求见 [docs/api-guide.md](docs/api-guide.md)。
 - 激活后的周期路径不得进行动态内存分配、阻塞式 I/O、日志刷屏或重新配置从站。保持运行期调用为 IgH 标记的 `rt_safe` 操作。
-- 使用 `SharedMemoryConfig(master_id)` 创建主站侧 IPC；客户端使用 `SharedMemoryConfig::getInstance(master_id)`。保持每个主站 ID 在 IgH、共享内存、PDO 缓冲区和信号量中的映射一致。
-- IPC 命名约定为 `ecm{id}`、`pd_input{id}`、`pd_output{id}` 和 `sync{id}_{0..9}`。新增 IPC 对象也必须包含主站 ID，禁止跨主站共享可变状态。
-- 每个周期先把 EtherCAT 输入发布到 `pd_input{id}`，再从 `pd_output{id}` 取得待发送输出；数据就绪后通过现有信号量接口唤醒等待客户端。
-- `EcatBus`、`Slave` 和 `PdVar` 是跨进程 ABI。不要随意改变字段顺序、类型、数组上限或旧别名 `EcatConfigMaster`/`EcatConfig`；确需变更时必须同步主站与客户端并增加兼容性验证。
+- 使用 `SharedMemoryConfig(master_id)` 创建主站侧 IPC；客户端优先使用 `connect()` 检查错误，只读工具使用 `connect(true)`；保留 `getInstance(master_id)` 兼容入口。初始化完毕并创建非实时命令线程后才调用 `publishReady()`。保持每个主站 ID 在 IgH、共享内存、PDO 缓冲区和信号量中的映射一致。
+- IPC 命名约定为 `ecm_v2_{id}`、`pd_input_v2_{id}`、`pd_output_v2_{id}` 和 `sync_v2_{id}_{0..9}`。新增 IPC 对象也必须包含主站 ID，禁止跨主站共享可变状态。
+- 每个周期先把 EtherCAT 输入发布到 `pd_input_v2_{id}`，再从 `pd_output_v2_{id}` 取得待发送输出；数据就绪后通过现有信号量接口唤醒等待客户端。
+- `EcatBus`、`Slave` 和 `PdVar` 的 ABI v2 唯一定义来自固定版本子模块 `3rdparty/rocos-shm`，本地旧头文件仅作转发。不要随意改变字段顺序、类型、数组上限或旧别名 `EcatConfigMaster`/`EcatConfig`；确需变更时必须在公共库统一修改，同步主站与客户端并增加兼容性验证。v2 与 v1 不兼容，禁止双写或热接管。
+- 动态标量统一通过 `atomicLoad`/`atomicStore` 访问；邮箱只由唯一非实时线程处理。`is_authorized` 在 IgH 固定为 true；状态集合不赋给单一 `current_state`（使用 0），链路/WKC/从站 AL 状态由诊断字段及有效位表达。
+- ABI v2 拒绝非字节对齐 PDO；当前 TC7 GPIO 配置因此不可直接启动。仅支持统计复位邮箱命令，SDO/状态控制尚未验收，不声明能力。
 - PDO 访问类型的 `sizeof(T)` 必须与 `PdVar::size` 一致。新增代码先验证从站 ID、变量 ID、偏移和长度，再访问映射内存。
 - `EC_SEM_NUM` 同时限制每个主站可分配的等待线程数量。改动线程注册或信号量逻辑时，覆盖上限、重复等待和多主站隔离场景。
 

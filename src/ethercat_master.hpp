@@ -20,6 +20,7 @@ struct EthercatMasterTestPeer;
  * @brief Value snapshot of master and domain state for one cycle.
  */
 struct BusState {
+    std::uint32_t status_valid{0};            ///< v2 online/link/WKC validity bits.
     unsigned int responding_slaves{0};         ///< Number of slaves responding.
     unsigned int al_states{0};                 ///< Bitmask of application-layer states.
     bool link_up{false};                       ///< True when the physical link is up.
@@ -104,6 +105,9 @@ public:
     /// Optional caller-owned per-slave readiness snapshot (configuration order).
     int pollSlaves(ec_al_state_t target, bool &all_ready, bool *ready_states,
                    std::size_t capacity) noexcept;
+    // Static metadata is copied only before ready; runtime sampling is rt_safe.
+    bool publishIdentity(EcatBus &bus) const noexcept;
+    void publishSlaveRuntime(EcatBus &bus) noexcept;
     std::size_t slaveCount() const noexcept { return slave_configs_.size(); }
     PdoVerification &pdoVerification() noexcept { return pdo_verification_; }
     const PdoVerification &pdoVerification() const noexcept { return pdo_verification_; }
@@ -116,7 +120,7 @@ public:
     std::size_t inputSize() const noexcept;
     /// @brief Returns the output-domain process-data size in bytes.
     std::size_t outputSize() const noexcept;
-    /// Shared images include separate byte slots for packed wire entries.
+    /// ABI v2 shared byte images retain the domain sizes.
     std::size_t sharedInputSize() const noexcept;
     std::size_t sharedOutputSize() const noexcept;
     /// Publish all inputs, then consume outputs; no allocation or blocking.
@@ -152,6 +156,7 @@ private:
     void reset() noexcept;
 
     std::vector<ec_slave_config_t *> slave_configs_;
+    std::vector<ec_slave_info_t> slave_identities_;
     PdoVerification pdo_verification_;
     ProcessDataLayout process_data_layout_;
     ec_master_t *master_{nullptr};

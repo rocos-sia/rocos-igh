@@ -40,7 +40,7 @@ struct PdoEntrySpec {
     std::uint8_t bit_length;     ///< Wire bit width (1..255).
     unsigned int offset;         ///< Byte offset in the domain (filled by IgH).
     unsigned int bit_position;   ///< Wire bit position within the byte (0..7).
-    // Process-local metadata only; PdVar and the shared-memory ABI are unchanged.
+    // Process-local metadata; ABI v2 only accepts byte entries, so equals offset.
     unsigned int shared_offset{std::numeric_limits<unsigned int>::max()};
 };
 

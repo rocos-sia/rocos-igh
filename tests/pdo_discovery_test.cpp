@@ -187,6 +187,13 @@ bool packedMappingTests() {
         rocos::PdoBusConfig config;
         std::string error;
         CHECK(rocos::loadPdoConfig(file.path, config, error));
+        if (width % 8 != 0) {
+            CHECK(!discover(config, file.path, error));
+            CHECK(error.find("byte-aligned") != std::string::npos);
+            CHECK(config.slaves[0].rx_pdos[0].entries.empty());
+            CHECK(contents(file.path) == yaml());
+            continue;
+        }
         CHECK(discover(config, file.path, error));
         CHECK(config.slaves[0].rx_pdos[0].entries[0].bit_length == width);
         CHECK(rocos::loadPdoConfig(file.path, config, error));

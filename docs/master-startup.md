@@ -107,7 +107,7 @@ sudo ./build/rocos_igh_master \
 | `--dc on` | 启用 Distributed Clocks；YAML 中必须恰有一个从站设置 `dc_ref: true`，其他从站为 false 或省略 |
 | `--op-timeout-ms 60000` | OP 启动阶段总预算为 60 秒，包含稳定确认和 PDO 异步读回验证 |
 | `--cpu 3` | 将周期线程绑定到逻辑 CPU 3；编号从 0 开始，不是“第 3 个物理核” |
-| `--master-id 0` | 本次省略，默认主站 0，对应 `ecm0`、`pd_input0`、`pd_output0` 等 IPC |
+| `--master-id 0` | 本次省略，默认主站 0，对应 `ecm_v2_0`、`pd_input_v2_0`、`pd_output_v2_0` 等 IPC |
 | `--period-us 1000` | 本次省略，默认周期 1000 µs，即 1 ms；当前最小支持值为 1000 |
 | `--preop-timeout-ms 10000` | 本次省略，默认 PREOP 总预算为 10 秒，包含等待、初始化 SDO、PDO 配置和读回重试 |
 

@@ -12,7 +12,6 @@ void setup(AppState &st, int id) {
     st.demo = true;
     st.connected = true;
     st.cfg = std::make_unique<SharedMemoryConfig>(id);
-    st.cfg->ecm_size_ = sizeof(EcatBus);
     st.cfg->ecatBus = static_cast<EcatBus *>(mmap(nullptr, sizeof(EcatBus), PROT_READ | PROT_WRITE,
                                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     check(st.cfg->ecatBus != MAP_FAILED);
@@ -89,5 +88,11 @@ int main() {
     check(request(st, length + length + "X-Rocos-Write: 1\r\n", body).find("400 ") != std::string::npos);
     check(request(st, length + "X-Rocos-Write: 1\r\nTransfer-Encoding: chunked\r\n", body).find("400 ") != std::string::npos);
     check(request(st, length + "X-Rocos-Write: 1\r\n", "short").find("400 ") != std::string::npos);
+    for (auto *app : {&st, &other}) {
+        munmap(app->cfg->ecatBus, sizeof(EcatBus));
+        munmap(app->cfg->pdOutputPtr, 13);
+        app->cfg->ecatBus = nullptr;
+        app->cfg->pdOutputPtr = nullptr;
+    }
     std::cout << "OUT write validation and HTTP tests passed\n";
 }

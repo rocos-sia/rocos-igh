@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Threads REQUIRED)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../3rdparty/rocos-shm" "${CMAKE_CURRENT_BINARY_DIR}/rocos-shm")
 
 add_executable(shm_web_server shm_web_server.cpp)
 
@@ -15,6 +16,7 @@ target_include_directories(shm_web_server PRIVATE
 target_compile_options(shm_web_server PRIVATE -Wall -Wextra)
 
 target_link_libraries(shm_web_server PRIVATE
+    rocos::shm
     Threads::Threads
     rt
 )
@@ -50,6 +52,6 @@ if(BUILD_TESTING)
     add_executable(shm_web_output_test output_write_test.cpp)
     target_include_directories(shm_web_output_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
     target_compile_options(shm_web_output_test PRIVATE -Wall -Wextra)
-    target_link_libraries(shm_web_output_test PRIVATE Threads::Threads rt)
+    target_link_libraries(shm_web_output_test PRIVATE rocos::shm Threads::Threads rt)
     add_test(NAME shm_web_output COMMAND shm_web_output_test)
 endif()

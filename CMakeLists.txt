@@ -16,6 +16,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
+include(CTest)
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/rocos-shm/CMakeLists.txt")
+    message(FATAL_ERROR "Missing rocos-shm: run git submodule update --init --recursive")
+endif()
+set(ROCOS_SHM_BUILD_TESTS ${BUILD_TESTING} CACHE BOOL "Build offline v2 IPC tests")
+add_subdirectory(3rdparty/rocos-shm)
+
 if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
@@ -36,6 +43,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	target_compile_features(rocos_igh_core PUBLIC cxx_std_17)
 	target_compile_definitions(rocos_igh_core PUBLIC ROCOS_IGH_BUILD_MASTER=1)
 	target_link_libraries(rocos_igh_core PUBLIC
+		rocos::shm
 		EtherCAT::EtherCAT
 		yaml-cpp
 		Threads::Threads
@@ -47,6 +55,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 
 	add_executable(rocos_igh_master src/main.cpp)
 	target_link_libraries(rocos_igh_master PRIVATE rocos_igh_core)
+	target_compile_definitions(rocos_igh_master PRIVATE ROCOS_IGH_VERSION="${ROCOS_IGH_VERSION}")
 else()
 	add_library(rocos_igh_core INTERFACE)
 	target_include_directories(rocos_igh_core INTERFACE
@@ -54,13 +63,12 @@ else()
 	)
 	target_compile_features(rocos_igh_core INTERFACE cxx_std_17)
 	target_compile_definitions(rocos_igh_core INTERFACE ROCOS_IGH_BUILD_MASTER=0)
-	target_link_libraries(rocos_igh_core INTERFACE Threads::Threads ${CMAKE_DL_LIBS})
+	target_link_libraries(rocos_igh_core INTERFACE rocos::shm Threads::Threads ${CMAKE_DL_LIBS})
 	if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		target_link_libraries(rocos_igh_core INTERFACE rt)
 	endif()
 endif()
 
-include(CTest)
 if(BUILD_TESTING)
 	add_executable(process_data_layout_test tests/process_data_layout_test.cpp)
 	if(NOT ROCOS_IGH_BUILD_MASTER)
@@ -128,7 +136,7 @@ if(BUILD_TESTING)
 		ROCOS_IGH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 	)
 	target_compile_features(pdo_config_test PRIVATE cxx_std_17)
-	target_link_libraries(pdo_config_test PRIVATE yaml-cpp)
+	target_link_libraries(pdo_config_test PRIVATE yaml-cpp rocos::shm)
 	add_test(NAME pdo_config COMMAND pdo_config_test)
 
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
@@ -141,4 +149,5 @@ if(BUILD_TESTING)
 	)
 	target_link_libraries(shared_memory_config_test PRIVATE rocos_igh_core)
 	add_test(NAME shared_memory_config COMMAND shared_memory_config_test)
+	set_tests_properties(shared_memory_config PROPERTIES TIMEOUT 30)
 endif()

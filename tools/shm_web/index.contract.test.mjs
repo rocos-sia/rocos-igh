@@ -144,3 +144,28 @@ test('OUT form submits typed bytes once with exact target and reports failures',
   assert.match(result.textContent, /连接不可用/);
   assert.equal(button.disabled, true);
 });
+
+test('real monitor stays read-only and unavailable slave diagnostics stay unknown', () => {
+  assert.match(html, /setWriteEnabled\(snapshot\.demo === true && snapshot\.read_only === false\)/);
+  assert.match(server, /connect\(true\)/);
+  const input = { disabled: false };
+  const form = { dataset: {}, elements: { value: input } };
+  const button = { disabled: false, title: '', closest: () => form };
+  const context = vm.createContext({
+    canWrite: true,
+    $: () => ({ querySelectorAll: () => [button] }),
+  });
+  vm.runInContext(html.slice(html.indexOf('  function setWriteEnabled'), html.indexOf('  function handle')), context);
+  context.setWriteEnabled(false);
+  assert.equal(context.canWrite, false);
+  assert.equal(button.disabled, true);
+  assert.equal(input.disabled, true);
+  assert.match(button.title, /只读/);
+  context.setWriteEnabled(true);
+  assert.equal(button.disabled, false);
+  assert.equal(input.disabled, false);
+  vm.runInContext(html.slice(html.indexOf('  function slaveRuntime'), html.indexOf('  function renderSlaves')), context);
+  assert.equal(context.slaveRuntime({ online: 1, al_state: 8, runtime_valid: 0 }), '在线状态未知 · AL 未知');
+  assert.equal(context.slaveRuntime({ online: 1, al_state: 8, runtime_valid: 3 }), '在线 · AL OP');
+  assert.equal(context.slaveRuntime({ online: 0, al_state: 8, runtime_valid: 1 }), '离线 · AL 未知');
+});

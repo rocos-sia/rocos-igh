@@ -122,39 +122,41 @@ timespec advanceDeadline(const timespec &previous_deadline,
     return fromNanoseconds(previous_ns + (intervals * period_ns));
 }
 
+bool applyStatisticsReset(StatisticsReset &reset, CycleStatistics &statistics,
+                          EcatBus &bus) noexcept {
+    const auto ticket = reset.pending();
+    if (ticket == 0) return false;
+    resetTimingStatistics(statistics);
+    atomicStore(bus.min_cycle_time, 0.0);
+    atomicStore(bus.max_cycle_time, 0.0);
+    atomicStore(bus.avg_cycle_time, 0.0);
+    atomicStore(bus.current_cycle_time, 0.0);
+    reset.acknowledge(ticket);
+    return true;
+}
+
 #if ROCOS_IGH_BUILD_MASTER
 // Publishes one cycle's state and timing into the shared EcatBus snapshot.
-// Honors a pending resetCycleTime request and marks is_authorized only when the
-// link is up, all slaves respond, and both domain working counters are complete.
+// IgH has no runtime-license check or equivalent single master AL state.
 void updateSharedBus(const BusState &state,
                      CycleStatistics &statistics,
                      std::uint32_t period_us,
-                     long monotonic_timestamp_us,
+                     long wall_timestamp_us,
                      EcatBus &bus) noexcept {
-    const double current_cycle_us = statistics.current_us;
-    if (bus.resetCycleTime) {
-        resetTimingStatistics(statistics);
-        bus.resetCycleTime = false;
-        // Discard the stale measurement taken before the reset; the next cycle
-        // will seed fresh min/max/avg from its own duration.
-        return;
-    }
-
-    accountCycleDuration(statistics, current_cycle_us);
-
-    bus.timestamp = monotonic_timestamp_us;
-    bus.dt = period_us;
-    bus.min_cycle_time = statistics.minimum_us;
-    bus.max_cycle_time = statistics.maximum_us;
-    bus.avg_cycle_time = statistics.average_us;
-    bus.current_cycle_time = statistics.current_us;
-    bus.current_state = static_cast<int>(state.al_states);
-
-    bus.is_authorized = state.link_up &&
-                        state.al_states == EC_AL_STATE_OP &&
-                        state.responding_slaves == static_cast<unsigned int>(bus.slave_num) &&
-                        state.input_wc_state == EC_WC_COMPLETE &&
-                        state.output_wc_state == EC_WC_COMPLETE;
+    accountCycleDuration(statistics, statistics.current_us);
+    atomicStore(bus.timestamp, wall_timestamp_us);
+    atomicStore(bus.dt, period_us);
+    atomicStore(bus.min_cycle_time, statistics.minimum_us);
+    atomicStore(bus.max_cycle_time, statistics.maximum_us);
+    atomicStore(bus.avg_cycle_time, statistics.average_us);
+    atomicStore(bus.current_cycle_time, statistics.current_us);
+    atomicStore(bus.current_state, 0);
+    atomicStore(bus.is_authorized, true);
+    atomicStore(bus.connected_slave_num, state.responding_slaves);
+    atomicStore(bus.link_up, state.link_up ? 1U : 0U);
+    atomicStore(bus.wc_state, !(state.status_valid & 4U) ? 0U :
+        (state.input_wc_state == EC_WC_COMPLETE && state.output_wc_state == EC_WC_COMPLETE ? 1U : 2U));
+    atomicStore(bus.status_valid, state.status_valid);
 }
 
 // Binds the task to an initialized master and mapped IPC for the given period.
@@ -224,6 +226,14 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
 
         master_.receiveAndProcess();
         const BusState state = master_.readState();
+        if (ipc_.ecatBus != nullptr) {
+            timespec wall_time{};
+            if (clock_gettime(CLOCK_REALTIME, &wall_time) != 0) return errno;
+            CycleStatistics startup_statistics{};
+            updateSharedBus(state, startup_statistics, period_us_, toMicroseconds(wall_time), *ipc_.ecatBus);
+            atomicStore(ipc_.ecatBus->heartbeat_mono_ns, toNanoseconds(wake_time));
+            master_.publishSlaveRuntime(*ipc_.ecatBus);
+        }
 
         static_assert(MAX_SLAVE_NUM <= 64, "Startup OP snapshot must fit in 64 bits");
         static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
@@ -337,7 +347,12 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
 
         const BusState state = master_.readState();
         if (ipc_.ecatBus != nullptr) {
-            updateSharedBus(state, statistics_, period_us_, toMicroseconds(wake_time), *ipc_.ecatBus);
+            timespec wall_time{};
+            if (clock_gettime(CLOCK_REALTIME, &wall_time) != 0) return errno;
+            updateSharedBus(state, statistics_, period_us_, toMicroseconds(wall_time), *ipc_.ecatBus);
+            atomicStore(ipc_.ecatBus->heartbeat_mono_ns, toNanoseconds(wake_time));
+            master_.publishSlaveRuntime(*ipc_.ecatBus);
+            (void)applyStatisticsReset(statistics_reset_, statistics_, *ipc_.ecatBus);
         }
 
         if (clock_gettime(CLOCK_MONOTONIC, &send_begin) != 0) return errno;
@@ -375,7 +390,7 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             window.input_wc_state = static_cast<unsigned int>(state.input_wc_state);
             window.output_wc_state = static_cast<unsigned int>(state.output_wc_state);
             window.link_up = state.link_up;
-            window.authorized = ipc_.ecatBus != nullptr && ipc_.ecatBus->is_authorized;
+            window.authorized = ipc_.ecatBus != nullptr && atomicLoad(ipc_.ecatBus->is_authorized);
             window.total_missed = statistics_.missed_deadlines;
             window.total_wc_errors = total_wc_errors;
             window.total_link_down = total_link_down;

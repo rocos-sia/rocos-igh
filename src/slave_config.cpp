@@ -339,8 +339,8 @@ bool validateSlaveConfig(const StaticSlaveConfig &config, std::string &error) no
                     error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] bit_length must be > 0";
                     return false;
                 }
-                if (entry.bit_position > 7U) {
-                    error = "slave[" + std::to_string(slave_index) + "] entry[" + std::to_string(entry_index) + "] bit_position must be 0..7";
+                if (entry.bit_length % 8U != 0U || entry.bit_position != 0U) {
+                    error = "ABI v2 requires byte-aligned PDO entries";
                     return false;
                 }
 
@@ -396,19 +396,17 @@ bool publishConfig(EcatBus &bus, const StaticSlaveConfig &config, std::string &e
             int output_count = 0;
             for (std::size_t entry_index = 0; entry_index < source_slave.entry_count; ++entry_index) {
                 const PdoEntrySpec &entry = source_slave.entries[entry_index];
-                const bool expanded = entry.bit_position != 0 || entry.bit_length % 8 != 0;
-                if (expanded && entry.shared_offset == std::numeric_limits<unsigned int>::max()) {
-                    error = "bit PDO shared-memory layout has not been prepared";
+                if (entry.bit_position != 0 || entry.bit_length % 8 != 0) {
+                    error = "ABI v2 requires byte-aligned PDO entries";
                     return false;
                 }
-                const auto offset = entry.shared_offset == std::numeric_limits<unsigned int>::max()
-                    ? entry.offset : entry.shared_offset;
+                const auto offset = entry.offset;
                 if (offset > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
                     error = "entry offset exceeds PdVar range";
                     return false;
                 }
 
-                const unsigned int byte_size = (static_cast<unsigned int>(entry.bit_length) + 7U) / 8U;
+                const unsigned int byte_size = static_cast<unsigned int>(entry.bit_length) / 8U;
                 if (byte_size > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
                     error = "entry size exceeds PdVar range";
                     return false;

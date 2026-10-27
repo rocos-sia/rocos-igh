@@ -18,7 +18,7 @@
 - **每主站一个进程**：一个进程只请求一个 `master_id`，多主站通过启动多个进程实现。
 - **启动时配置**：使用 YAML 描述从站和 PDO，启动阶段一次性解析并转换为稳定的 IgH 指针视图。
 - **实时路径最小化**：激活前完成配置、分配和映射；周期线程不分配内存、不阻塞、不输出日志。
-- **保持 IPC 兼容**：复用 [shared_memory_config.hpp](../src/shared_memory_config.hpp) 的数据结构、接口和旧类型别名。
+- **统一 IPC ABI**：通过固定 `rocos-shm` 子模块和 [shared_memory_config.hpp](../src/shared_memory_config.hpp) 的数据结构、接口和旧类型别名。
 
 ## 3. 总体架构
 
@@ -44,8 +44,8 @@ flowchart LR
 
     Master <--> IgH[IgH EtherCAT Master]
     IgH <--> Slaves[EtherCAT 从站]
-    IPC <--> Shm[ecm / pd_input / pd_output]
-    IPC --> Sem[sync 信号量]
+    IPC <--> Shm[ecm_v2 / pd_input_v2 / pd_output_v2]
+    IPC --> Sem[sync_v2 信号量]
     Client <--> Shm
     Sem --> Client
 ```
@@ -107,13 +107,14 @@ IgH 会写入条目偏移，vendor ID 和 product code 从扫描到的 SII 信�
 直接复用现有接口：
 
 - 主站侧通过 `SharedMemoryConfig(master_id)` 创建 IPC。
-- 客户端通过 `SharedMemoryConfig::getInstance(master_id)` 连接 IPC。
+- 唯一可写 App 通过 `connect()` 连接；监控工具通过 `connect(true)` 只读连接，旧 singleton 入口仍保留。
+- 初始化静态元数据和命令线程后发布 `ready`；ABI、长度和映射边界均由公共库校验。v1 不兼容，详见 [v2 迁移说明](shared-memory-v2.md)。
 - `EcatBus` 保存状态、周期统计、从站和 PDO 元数据。
-- `pd_input{id}` 保存从站到主站的数据。
-- `pd_output{id}` 保存客户端要求主站发送给从站的数据。
-- `sync{id}_{0..9}` 通知等待客户端输入数据已更新。
+- `pd_input_v2_{id}` 保存从站到主站的数据。
+- `pd_output_v2_{id}` 保存客户端要求主站发送给从站的数据。
+- `sync_v2_{id}_{0..9}` 通知等待客户端输入数据已更新。
 
-`EcatBus`、`Slave` 和 `PdVar` 是跨进程 ABI，首版不改变其字段布局。
+`EcatBus`、`Slave` 和 `PdVar` 使用公共库固定 ABI v2，字段和布局不可在消费者中修改。
 
 ## 5. 多主站模型
 
@@ -128,8 +129,8 @@ rocos_igh_master --config config/master1.yaml --master-id 1 --period-us 1000
 
 | `master_id` | IgH master | 总线状态 | PDO 输入 | PDO 输出 | 信号量 |
 |---:|---:|---|---|---|---|
-| 0 | 0 | `ecm0` | `pd_input0` | `pd_output0` | `sync0_0` ... `sync0_9` |
-| 1 | 1 | `ecm1` | `pd_input1` | `pd_output1` | `sync1_0` ... `sync1_9` |
+| 0 | 0 | `ecm_v2_0` | `pd_input_v2_0` | `pd_output_v2_0` | `sync_v2_0_0` ... `sync_v2_0_9` |
+| 1 | 1 | `ecm_v2_1` | `pd_input_v2_1` | `pd_output_v2_1` | `sync_v2_1_0` ... `sync_v2_1_9` |
 
 表中是逻辑名称；POSIX API 使用的实际名称由 `SharedMemoryConfig` 补充前导 `/`。进程之间不共享可变的 C++ 全局状态。任一主站退出或故障不得停止其他主站。
 
@@ -148,7 +149,8 @@ sequenceDiagram
     App->>EC: activate and obtain domain buffers
     App->>IPC: create ecm and semaphores
     App->>IPC: create PDO buffers using domain sizes
-    App->>IPC: publish slave/PDO metadata
+    App->>IPC: publish identity/PDO/version metadata
+    App->>IPC: start non-RT command worker, publishReady
     App->>RT: configure RT environment and start
     RT-->>App: run until exit flag
     App->>RT: stop and join
@@ -184,8 +186,8 @@ notify waiting clients
 
 PDO 方向以主站视角定义：
 
-- **输入**：从站 TxPDO，经输入 domain 复制到 `pd_input{id}`。
-- **输出**：客户端写入 `pd_output{id}`，再复制到输出 domain，作为从站 RxPDO 发送。
+- **输入**：从站 TxPDO，经输入 domain 复制到 `pd_input_v2_{id}`。
+- **输出**：客户端写入 `pd_output_v2_{id}`，再复制到输出 domain，作为从站 RxPDO 发送。
 
 客户端被唤醒时，本周期输入快照已完整写入。客户端随后写入的输出最早在下一周期被主站取走。该一周期延迟换取简单、确定的数据边界，不在首版增加双缓冲或序列锁。
 
@@ -210,7 +212,7 @@ PDO 方向以主站视角定义：
 
 - **WKC 异常或从站掉线**：继续执行收发周期，更新 `EcatBus` 状态和异常计数，不在周期线程中重配从站。
 - **周期超时**：更新当前、最小、最大和平均周期时间，并累计超时次数；继续下一个未来截止时间。
-- **客户端未更新输出**：继续发送 `pd_output{id}` 中最近可见的值；首版不检测输出新鲜度。
+- **客户端未更新输出**：继续发送 `pd_output_v2_{id}` 中最近可见的值；首版不检测输出新鲜度。
 - **客户端处理过慢**：信号量只表示“至少有新数据”，不排队保存每个历史周期。
 - **主站链路恢复**：由 IgH 状态机继续处理；首版不实现应用层自动重建配置。
 
@@ -246,7 +248,7 @@ src/
   pdo_config.hpp/.cpp         # YAML PDO 数据模型、解析与校验
   slave_config.hpp/.cpp       # IgH 配置转换、格式化输出与元数据发布
   runtime_options.hpp/.cpp    # 严格命令行解析（无 EtherCAT 副作用）
-  shared_memory_config.hpp    # IPC 与跨进程共享 ABI
+  shared_memory_config.hpp    # 转发到 rocos-shm ABI v2
 tests/
   pdo_config_test.cpp             # YAML 解析和格式校验
   shared_memory_config_test.cpp  # IPC、IgH 配置视图和周期逻辑测试
@@ -287,7 +289,7 @@ ctest --test-dir build-master --output-on-failure
 ### 12.1 默认无硬件测试
 
 - 每个测试使用唯一 `master_id`，避免并行运行时名称冲突。
-- 验证 `ecm{id}`、输入/输出共享内存和信号量名称隔离。
+- 验证 `ecm_v2_{id}`、输入/输出共享内存和信号量名称隔离。
 - 验证定长 PDO 输入发布和输出读取。
 - 验证等待线程收到通知，并覆盖 `EC_SEM_NUM` 上限和重复等待。
 - 验证正常退出后的映射、文件描述符和信号量清理。

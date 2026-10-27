@@ -15,6 +15,24 @@ The build requires yaml-cpp (`libyaml-cpp-dev` on Debian/Ubuntu). Master-enabled
 builds additionally require the IgH `ecrt.h` header and `libethercat` library.
 The master executable is enabled by default (`ROCOS_IGH_BUILD_MASTER=ON`).
 
+## Shared memory ABI v2
+
+The shared ABI and IPC implementation come from the pinned Git submodule
+[`rocos-shm`](3rdparty/rocos-shm) (`87c436c49777834964a5f1a38d46b4e0c74d34b2`, package 2.0.0 / ABI 2).
+Initialize it before either the master or Web viewer build:
+
+```bash
+git submodule update --init --recursive
+```
+
+`src/shared_memory_config.hpp` is a compatibility include only; consumers link
+`rocos::shm`. See [the migration and capability contract](docs/shared-memory-v2.md).
+All masters, Apps and monitors must be rebuilt together. Old binaries cannot connect.
+
+**TC7 配置限制：** `config/tc7_pdo.yaml` 的第 8 个从站含 1-bit GPIO，当前 v2
+规范要求拒绝非字节对齐 PDO，因此此配置会在加载时失败。保留设备真实位宽，不能
+把 1 改为 8 来绕过校验；需设备提供合规字节映射，或另行扩展协议后再使用。
+
 ## Quick build with presets
 
 With CMake 3.20 or newer and Make installed, run from the repository root:
@@ -138,7 +156,7 @@ WKC 异常按周期计数，一个周期两个 domain 都异常只记一次；�
 周期线程仅查询单调时钟、累计统计并发布固定大小的进程内无锁快照，
 不为报告分配内存、打印或等待日志线程。日志线程延迟时丢弃新报告窗口，
 累计计数继续更新。截止期按本轮执行完成时间推进，超时跳过错过的周期而不补跑；
-运行中 WKC 异常或掉线仍清除 `is_authorized` 并继续周期通信。
+运行中 WKC 异常或掉线分别通过 `wc_state`、`link_up` 和有效位发布，并继续周期通信；IgH 的 `is_authorized` 固定为 true。
 
 ### 周期线程 CPU 亲和性
 
@@ -165,7 +183,7 @@ sudo ./build/rocos_igh_master --config ./config/talon_pdo.yaml \
 周期仍使用 `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...)`；
 亲和性和实时设置仅在初始化执行，不给 1 ms 周期增加系统配置调用、分配或日志。
 超时仍跳过错过的周期并累计 `missed_deadlines`，不补跑；启动期总线异常处理、
-运行期掉线/WKC 异常时清除 `is_authorized` 并继续周期通信的行为保持不变。
+运行期掉线/WKC 异常通过 v2 诊断字段报告，周期通信继续。
 
 可用 `lscpu -e=CPU,CORE,SOCKET,ONLINE` 查看逻辑核与物理核对应关系，
 运行后用 `taskset -pc <主站PID>` 检查主线程绑定结果。退出统计中的
@@ -269,7 +287,7 @@ IgH 激活时仍可能再次写入 PDO 配置，PREOP 验证通过不代表业�
 PDO verification failed at slave[position=2] SM3 TxPDO object=0x1a07:02 mapping entry/order expected=0x60640020 actual=0x60640010 expected{index=0x6064,subindex=0x0,bits=32} actual{index=0x6064,subindex=0x0,bits=16}
 ```
 
-PREOP 和 OP 均按单调时钟计时，查询及调度耗时计入超时。OP 从启动周期循环开始计时，默认 60000 ms，可用 `--op-timeout-ms` 配置；两个超时均为整个阶段的总时限，包含连续稳定确认时间，不是每个从站单独计时。`--op-timeout-ms` 还包含所有从站的 PDO 读回验证时间；多轴或邮箱较慢的设备可适当增加此值。值必须为正整数毫秒，0 不表示无限等待。状态查询失败或超时会停止启动并返回错误，不会继续处理客户端输出。PDO 验证开始前，链路/OP/WC 不满足时继续等待；验证一旦开始，任何 OP、链路或 WKC 退化都会中止启动，避免沿用从站重新配置前的校验结果。周期超时跳过已错过的周期，不补跑，也不延长启动或单次读取超时。运行期链路/WC/汇总 OP 状态异常会使共享总线的 `is_authorized` 为 false，现有周期通信仍继续，不自动执行状态重置。
+PREOP 和 OP 均按单调时钟计时，查询及调度耗时计入超时。OP 从启动周期循环开始计时，默认 60000 ms，可用 `--op-timeout-ms` 配置；两个超时均为整个阶段的总时限，包含连续稳定确认时间，不是每个从站单独计时。`--op-timeout-ms` 还包含所有从站的 PDO 读回验证时间；多轴或邮箱较慢的设备可适当增加此值。值必须为正整数毫秒，0 不表示无限等待。状态查询失败或超时会停止启动并返回错误，不会继续处理客户端输出。PDO 验证开始前，链路/OP/WC 不满足时继续等待；验证一旦开始，任何 OP、链路或 WKC 退化都会中止启动，避免沿用从站重新配置前的校验结果。周期超时跳过已错过的周期，不补跑，也不延长启动或单次读取超时。运行期链路/WC 异常通过 `link_up`/`wc_state` 报告，各从站 AL 状态通过 `Slave.al_state` 报告；`is_authorized` 固定为 true。现有周期通信仍继续，不自动执行状态重置。
 
 例如，为多从站总线设置 PREOP 30 秒、OP 60 秒：
 

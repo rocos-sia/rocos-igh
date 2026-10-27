@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <future>
+#include <chrono>
 #include <iostream>
 #include <sstream>
 #include <atomic>
@@ -77,7 +79,7 @@ struct EthercatMasterTestPeer {
 namespace {
 
 int uniqueMasterId() {
-    return 10000 + static_cast<int>(::getpid() % 10000);
+    return 100000 + static_cast<int>(::getpid()) * 32;
 }
 
 std::string sharedMemoryName(const std::string &prefix, int id) {
@@ -106,6 +108,57 @@ bool semaphoreExists(const std::string &name) {
     return true;
 }
 
+bool testMailboxStatisticsReset() {
+    using namespace rocos;
+    SharedMemoryConfig owner(uniqueMasterId()), client(uniqueMasterId());
+    CHECK(owner.createSharedMemory() && owner.createPdDataMemoryProvider(0, 0));
+    owner.ecatBus->supported_cmds = 1U << CMD_RESET_STATS;
+    CHECK(owner.publishReady() && client.connect());
+    StatisticsReset reset;
+    std::atomic<bool> stop{false};
+    CycleStatistics stats{10, 7, 900, 1100, 1000, 1050};
+    atomicStore(owner.ecatBus->current_cycle_time, 1050.0);
+    auto command = std::async(std::launch::async, [&] {
+        AsyncCommandBox request, response;
+        request.cmd_type = CMD_RESET_STATS;
+        const auto rc = client.executeCommand(request, response);
+        return rc == RESULT_OK && response.status == BOX_SUCCESS &&
+               atomicLoad(client.ecatBus->current_cycle_time) == 0.0;
+    });
+    auto worker = std::async(std::launch::async, [&] {
+        const auto end = monotonicNs() + 1000000000ULL;
+        while (monotonicNs() < end) {
+            if (owner.processCommand([&](const AsyncCommandBox &req, AsyncCommandBox &) {
+                return reset.execute(req.deadline_mono_ns, stop);
+            })) return true;
+            std::this_thread::yield();
+        }
+        return false;
+    });
+    const auto end = monotonicNs() + 1000000000ULL;
+    while (!reset.pending() && monotonicNs() < end) std::this_thread::yield();
+    CHECK(reset.pending() != 0);
+    CHECK(command.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+    CHECK(atomicLoad(owner.ecatBus->cmd_box.status) == BOX_PROCESSING);
+    CHECK(stats.cycles == 10 && stats.current_us == 1050);
+    CHECK(applyStatisticsReset(reset, stats, *owner.ecatBus));
+    CHECK(stats.cycles == 0 && stats.current_us == 0 && stats.missed_deadlines == 7);
+    CHECK(command.get() && worker.get());
+    CHECK(!applyStatisticsReset(reset, stats, *owner.ecatBus));
+    CHECK(atomicLoad(owner.ecatBus->cmd_box.status) == BOX_IDLE);
+
+    // A local deadline leaves the requested cycle-boundary action pending.
+    CHECK(reset.execute(monotonicNs() + 1000000ULL, stop) == OUTCOME_UNKNOWN);
+    CHECK(reset.pending() != 0);
+    CHECK(reset.execute(monotonicNs() + 1000000000ULL, stop) == BUSY);
+    CHECK(applyStatisticsReset(reset, stats, *owner.ecatBus));
+    CHECK(reset.execute(monotonicNs() - 1, stop) == DEADLINE_EXCEEDED);
+    CHECK(reset.pending() == 0);
+    stop.store(true);
+    CHECK(reset.execute(monotonicNs() + 1000000000ULL, stop) == STATE_MISMATCH);
+    return true;
+}
+
 bool testEcatBusDefaults() {
     const rocos::EcatBus bus{};
     CHECK(bus.current_state == ECAT_STATE_INIT);
@@ -124,7 +177,8 @@ bool testInvalidArguments() {
 
     rocos::SharedMemoryConfig owner(uniqueMasterId());
     CHECK(owner.createSharedMemory());
-    CHECK(!owner.createPdDataMemoryProvider(0, 8));
+    CHECK(owner.createPdDataMemoryProvider(0, 8));
+    CHECK(owner.pdInputPtr == nullptr);
     CHECK(!owner.createPdDataMemoryProvider(8, -1));
     CHECK(!owner.createPdDataMemoryProvider(EC_SHM_MAX_SIZE + 1, 8));
     return true;
@@ -143,6 +197,7 @@ bool testMasterClientExchange() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
     CHECK(owner.createPdDataMemoryProvider(16, 16));
+    CHECK(owner.publishReady());
 
     rocos::SharedMemoryConfig client(id);
     CHECK(client.getSharedMemory());
@@ -169,6 +224,7 @@ bool testSecondOwnerIsolation() {
     rocos::SharedMemoryConfig owner_b(id + 1);
     CHECK(owner_b.createSharedMemory());
     CHECK(owner_b.createPdDataMemoryProvider(16, 16));
+    CHECK(owner_b.publishReady());
 
     rocos::SharedMemoryConfig client_b(id + 1);
     CHECK(client_b.getSharedMemory());
@@ -186,6 +242,7 @@ bool testSecondOwnerIsolation() {
         rocos::SharedMemoryConfig client_a(id);
         CHECK(owner_a.createSharedMemory());
         CHECK(owner_a.createPdDataMemoryProvider(16, 16));
+    CHECK(owner_a.publishReady());
         CHECK(client_a.getSharedMemory());
         CHECK(client_a.getPdDataMemoryProvider());
 
@@ -212,6 +269,7 @@ bool testDuplicateOwnerRejected() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
     CHECK(owner.createPdDataMemoryProvider(16, 16));
+    CHECK(owner.publishReady());
 
     rocos::SharedMemoryConfig client(id);
     CHECK(client.getSharedMemory());
@@ -230,23 +288,20 @@ bool testDuplicateOwnerRejected() {
     return true;
 }
 
-bool testSemaphoreRollbackOnPartialFailure() {
+bool testStaleSemaphoresReclaimed() {
     const int id = uniqueMasterId();
-    const int blocked_index = EC_SEM_NUM - 1;
-    const std::string blocked_name = semaphoreName(id, blocked_index);
-    sem_t *const blocker = sem_open(blocked_name.c_str(), O_CREAT | O_EXCL, 0660, 0);
-    CHECK(blocker != SEM_FAILED);
-
-    rocos::SharedMemoryConfig owner(id);
-    CHECK(!owner.createSharedMemory());
-    CHECK(!sharedMemoryExists(sharedMemoryName(EC_SHM, id)));
-    for (int index = 0; index < blocked_index; ++index) {
-        CHECK(!semaphoreExists(semaphoreName(id, index)));
+    const std::string name = semaphoreName(id, EC_SEM_NUM - 1);
+    sem_t *const stale = sem_open(name.c_str(), O_CREAT | O_EXCL, 0660, 1);
+    CHECK(stale != SEM_FAILED);
+    {
+        rocos::SharedMemoryConfig owner(id);
+        CHECK(owner.createSharedMemory());
+        int count = -1;
+        CHECK(sem_getvalue(owner.sem_mutex[EC_SEM_NUM - 1], &count) == 0 && count == 0);
     }
-    CHECK(semaphoreExists(blocked_name));
-
-    CHECK(sem_close(blocker) == 0);
-    CHECK(sem_unlink(blocked_name.c_str()) == 0);
+    CHECK(!semaphoreExists(name));
+    CHECK(!sharedMemoryExists(sharedMemoryName(EC_SHM, id)));
+    CHECK(sem_close(stale) == 0);
     return true;
 }
 
@@ -255,7 +310,7 @@ bool testPdRollbackOnPartialFailure() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
 
-    const std::string blocked_output_name = sharedMemoryName("pd_output", id);
+    const std::string blocked_output_name = sharedMemoryName("pd_output_v2_", id);
     const int blocker = shm_open(blocked_output_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
     CHECK(blocker >= 0);
     CHECK(ftruncate(blocker, 16) == 0);
@@ -264,7 +319,7 @@ bool testPdRollbackOnPartialFailure() {
     CHECK(flock(blocker, LOCK_EX | LOCK_NB) == 0);
 
     CHECK(!owner.createPdDataMemoryProvider(16, 16));
-    CHECK(!sharedMemoryExists(sharedMemoryName("pd_input", id)));
+    CHECK(!sharedMemoryExists(sharedMemoryName("pd_input_v2_", id)));
     CHECK(sharedMemoryExists(blocked_output_name));
 
     CHECK(close(blocker) == 0);
@@ -283,12 +338,12 @@ bool testStaleSharedMemoryIsReclaimed() {
     CHECK(ftruncate(stale_ecm, 16) == 0);
     CHECK(close(stale_ecm) == 0);
 
-    const int stale_pd_input = shm_open(sharedMemoryName("pd_input", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    const int stale_pd_input = shm_open(sharedMemoryName("pd_input_v2_", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
     CHECK(stale_pd_input >= 0);
     CHECK(ftruncate(stale_pd_input, 16) == 0);
     CHECK(close(stale_pd_input) == 0);
 
-    const int stale_pd_output = shm_open(sharedMemoryName("pd_output", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
+    const int stale_pd_output = shm_open(sharedMemoryName("pd_output_v2_", id).c_str(), O_RDWR | O_CREAT | O_EXCL, 0660);
     CHECK(stale_pd_output >= 0);
     CHECK(ftruncate(stale_pd_output, 16) == 0);
     CHECK(close(stale_pd_output) == 0);
@@ -296,6 +351,7 @@ bool testStaleSharedMemoryIsReclaimed() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
     CHECK(owner.createPdDataMemoryProvider(16, 16));
+    CHECK(owner.publishReady());
     return true;
 }
 
@@ -305,6 +361,7 @@ bool testConcurrentWaitRegistration() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
     CHECK(owner.createPdDataMemoryProvider(16, 16));
+    CHECK(owner.publishReady());
 
     rocos::SharedMemoryConfig client(id);
     CHECK(client.getSharedMemory());
@@ -318,6 +375,8 @@ bool testConcurrentWaitRegistration() {
             ready.fetch_add(1, std::memory_order_relaxed);
             client.wait();
             completed.fetch_add(1, std::memory_order_relaxed);
+            client.wait(); // Same thread must reuse its original slot.
+            completed.fetch_add(1, std::memory_order_relaxed);
         });
     }
 
@@ -326,10 +385,12 @@ bool testConcurrentWaitRegistration() {
     }
 
     CHECK(owner.notifyClients());
+    while (completed.load() < 2) std::this_thread::yield();
+    CHECK(owner.notifyClients());
     for (auto &waiter : waiters) {
         waiter.join();
     }
-    CHECK(completed.load(std::memory_order_relaxed) == 2);
+    CHECK(completed.load(std::memory_order_relaxed) == 4);
     return true;
 }
 
@@ -338,6 +399,7 @@ bool testWaitThreadLimitDoesNotDeadlock() {
     rocos::SharedMemoryConfig owner(id);
     CHECK(owner.createSharedMemory());
     CHECK(owner.createPdDataMemoryProvider(16, 16));
+    CHECK(owner.publishReady());
 
     rocos::SharedMemoryConfig client(id);
     CHECK(client.getSharedMemory());
@@ -345,12 +407,15 @@ bool testWaitThreadLimitDoesNotDeadlock() {
 
     std::atomic<int> ready{0};
     std::atomic<int> completed{0};
+    std::atomic<int> rejected{0};
     std::vector<std::thread> waiters;
     for (int index = 0; index < EC_SEM_NUM + 1; ++index) {
         waiters.emplace_back([&]() {
             ready.fetch_add(1, std::memory_order_relaxed);
-            client.wait();
-            completed.fetch_add(1, std::memory_order_relaxed);
+            try {
+                client.wait();
+                completed.fetch_add(1, std::memory_order_relaxed);
+            } catch (const std::runtime_error &) { ++rejected; }
         });
     }
 
@@ -362,7 +427,8 @@ bool testWaitThreadLimitDoesNotDeadlock() {
     for (auto &waiter : waiters) {
         waiter.join();
     }
-    CHECK(completed.load(std::memory_order_relaxed) == EC_SEM_NUM + 1);
+    CHECK(completed.load(std::memory_order_relaxed) == EC_SEM_NUM);
+    CHECK(rejected == 1);
     return true;
 }
 
@@ -416,7 +482,7 @@ bool testRuntimeOptions() {
     CHECK(options.config_path == "config/pdo.yaml");
     CHECK(!options.dc_enabled);
 
-    CHECK(options.preop_timeout_ms == 5000U);
+    CHECK(options.preop_timeout_ms == rocos::RuntimeOptions{}.preop_timeout_ms);
     CHECK(options.op_timeout_ms == 60000U);
     char preop_flag[] = "--preop-timeout-ms";
     char op_flag[] = "--op-timeout-ms";
@@ -443,7 +509,7 @@ bool testRuntimeOptions() {
         CHECK(error.find("duplicate") != std::string::npos);
     }
     CHECK(rocos::parseRuntimeOptions(7, valid, options, error));
-    CHECK(options.preop_timeout_ms == 5000U && options.op_timeout_ms == 60000U);
+    CHECK(options.preop_timeout_ms == rocos::RuntimeOptions{}.preop_timeout_ms && options.op_timeout_ms == 60000U);
 
     char dc_flag[] = "--dc";
     char dc_on[] = "on";
@@ -520,37 +586,17 @@ bool testRuntimeOptions() {
 }
 
 #if ROCOS_IGH_BUILD_MASTER
-bool testUpdateSharedBusResetKeepsCurrentCycleDuration() {
+bool testDeprecatedResetFlagIgnored() {
     rocos::CycleStatistics stats{};
-    stats.cycles = 9;
-    stats.minimum_us = 10.0;
-    stats.maximum_us = 20.0;
-    stats.average_us = 15.0;
     stats.current_us = 1250.0;
-
     rocos::EcatBus bus{};
     bus.resetCycleTime = true;
-    bus.slave_num = 1;
-
     rocos::BusState state{};
-    state.link_up = true;
-    state.responding_slaves = 1;
-    state.al_states = EC_AL_STATE_OP;
-    state.input_wc_state = EC_WC_COMPLETE;
-    state.output_wc_state = EC_WC_COMPLETE;
-
     rocos::updateSharedBus(state, stats, 1000U, 42L, bus);
-
-    CHECK(!bus.resetCycleTime);
-    CHECK(stats.cycles == 1U);
-    CHECK(stats.current_us == 1250.0);
-    CHECK(stats.minimum_us == 1250.0);
-    CHECK(stats.maximum_us == 1250.0);
-    CHECK(stats.average_us == 1250.0);
-    CHECK(bus.current_cycle_time == 1250.0);
-    CHECK(bus.min_cycle_time == 1250.0);
-    CHECK(bus.max_cycle_time == 1250.0);
-    CHECK(bus.avg_cycle_time == 1250.0);
+    CHECK(bus.resetCycleTime);
+    CHECK(stats.cycles == 1U && bus.current_cycle_time == 1250.0);
+    CHECK(bus.timestamp == 42L && bus.current_state == 0 && bus.is_authorized);
+    CHECK(bus.status_valid == 0 && bus.wc_state == 0);
     return true;
 }
 
@@ -892,7 +938,7 @@ bool testMasterCyclicCallsBeforeInitialization() {
 
     master.receiveAndProcess();
     CHECK(master.setApplicationTime(42U));
-    CHECK(master.queueAndSend());
+    CHECK(!master.queueAndSend());
 
     const rocos::BusState state = master.readState();
     CHECK(state.responding_slaves == 0U);
@@ -1014,7 +1060,7 @@ bool testSlaveConfigValidation() {
     };
     const rocos::StaticSlaveConfig invalid_config{&invalid_slave, 1};
     CHECK(!rocos::validateSlaveConfig(invalid_config, error));
-    CHECK(error.find("bit_position") != std::string::npos);
+    CHECK(error.find("byte-aligned") != std::string::npos);
     return true;
 }
 #endif
@@ -1022,6 +1068,7 @@ bool testSlaveConfigValidation() {
 }  // namespace
 
 int main() {
+    if (!testMailboxStatisticsReset()) return 1;
     if (!testEcatBusDefaults()) {
         return EXIT_FAILURE;
     }
@@ -1040,7 +1087,7 @@ int main() {
     if (!testDuplicateOwnerRejected()) {
         return EXIT_FAILURE;
     }
-    if (!testSemaphoreRollbackOnPartialFailure()) {
+    if (!testStaleSemaphoresReclaimed()) {
         return EXIT_FAILURE;
     }
     if (!testPdRollbackOnPartialFailure()) {
@@ -1065,7 +1112,7 @@ int main() {
         return EXIT_FAILURE;
     }
 #if ROCOS_IGH_BUILD_MASTER
-    if (!testUpdateSharedBusResetKeepsCurrentCycleDuration()) {
+    if (!testDeprecatedResetFlagIgnored()) {
         return EXIT_FAILURE;
     }
     if (!testUpdateSharedBusPreservesRequestAndExpectationStates()) {

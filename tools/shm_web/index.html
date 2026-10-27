@@ -273,7 +273,7 @@
       <span class="product-mark" aria-hidden="true">EC</span>
       <div>
         <h1>rocos_igh 共享内存观察器</h1>
-        <div class="sub">MASTER / <code id="masterid">—</code> · ECM / <code>ecm{id}</code> · RX / <code>pd_input{id}</code> · TX / <code>pd_output{id}</code></div>
+        <div class="sub">MASTER / <code id="masterid">—</code> · ECM / <code>ecm_v2_{id}</code> · RX / <code>pd_input_v2_{id}</code> · TX / <code>pd_output_v2_{id}</code></div>
       </div>
     </div>
     <div class="toolbar-status">
@@ -328,7 +328,7 @@
   </main>
 
   <footer>
-    SOURCE / <code>/dev/shm/ecm{master_id}</code> + <code>pd_input{master_id}</code> + <code>pd_output{master_id}</code> · REFRESH / 250 ms
+    SOURCE / <code>/dev/shm/ecm_v2_{master_id}</code> + <code>pd_input_v2_{master_id}</code> + <code>pd_output_v2_{master_id}</code> · REFRESH / 250 ms
   </footer>
 </div>
 
@@ -427,7 +427,7 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
     const badge = $('state');
     badge.textContent = s;
     badge.className = 'state-badge state-' + s;
-    setText('reqstate', bus.request_state);
+    setText('reqstate', bus.state_control_supported ? bus.request_state : '不支持');
     setText('auth', bus.is_authorized ? '是' : '否');
     setText('slavenum', bus.slave_num);
     setText('dt', fmt(bus.dt));
@@ -436,8 +436,16 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
     setText('max', fmt(bus.cycle.max));
     setText('avg', fmt(bus.cycle.avg));
     setText('ts', fmt(bus.timestamp));
-    setText('mode', bus.demo ? '演示 (demo)' : '真实');
-    setText('reset', bus.resetCycleTime ? '已请求' : '否');
+    setText('mode', bus.demo ? '演示 (demo)' : '真实 · 只读');
+    setText('reset', '由 App 命令触发');
+  }
+
+  function slaveRuntime(slave) {
+    const valid = slave.runtime_valid || 0;
+    const online = valid & 1 ? (slave.online ? '在线' : '离线') : '在线状态未知';
+    const states = { 1: 'INIT', 2: 'PREOP', 3: 'BOOT', 4: 'SAFEOP', 8: 'OP' };
+    const state = valid & 2 ? (states[slave.al_state] || '未知') : '未知';
+    return `${online} · AL ${state}`;
   }
 
   function renderSlaves(bus) {
@@ -450,6 +458,8 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
     const schema = slaveSchema(bus);
     if (container.dataset.schema === schema) {
       for (const slave of bus.slaves) {
+        const status = container.querySelector(`[data-slave-runtime="${slave.id}"]`);
+        if (status) status.textContent = slaveRuntime(slave);
         for (const variable of slave.output_vars) updateVariableRow(container, slave.id, 'out', variable);
         for (const variable of slave.input_vars) updateVariableRow(container, slave.id, 'in', variable);
       }
@@ -460,7 +470,7 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
       html += `<div class="slave-box">
         <div class="slave-head">
           <span class="name">#${slave.id} ${slave.name}</span>
-          <span class="meta">输入 ${slave.input_var_num} · 输出 ${slave.output_var_num}</span>
+          <span class="meta"><span data-slave-runtime="${slave.id}">${slaveRuntime(slave)}</span> · 输入 ${slave.input_var_num} · 输出 ${slave.output_var_num}</span>
         </div>
         <div class="table-scroll">
           <table>
@@ -485,7 +495,7 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
       dot.className = 'dot live';
       txt.textContent = demo
         ? '已连接（演示模式）· 数据为模拟值'
-        : '已连接 · 实时';
+        : '已连接 · 只读监控，输出由 App 控制';
     } else {
       dot.className = 'dot waiting';
       txt.textContent = error
@@ -498,6 +508,8 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
     canWrite = enabled;
     for (const button of $('slaves').querySelectorAll('.output-editor button')) {
       button.disabled = !enabled || button.closest('form').dataset.pending === 'true';
+      button.title = enabled ? '' : '只读监控：输出由唯一可写 App 控制';
+      button.closest('form').elements.value.disabled = !enabled;
     }
   }
 
@@ -516,7 +528,7 @@ import { compatibleTypeForSize, decodeStatusWord, encodeValue, formatTypedBytes,
     updateStatus(true, snapshot.demo);
     renderBus(snapshot);
     renderSlaves(snapshot);
-    setWriteEnabled(true);
+    setWriteEnabled(snapshot.demo === true && snapshot.read_only === false);
   }
 
   $('slaves').addEventListener('submit', async event => {

@@ -160,6 +160,7 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
     }
 
     slave_configs_.reserve(config.slave_count);
+    slave_identities_.reserve(config.slave_count);
     ec_slave_config_t *reference_clock_config = nullptr;
     for (std::size_t slave_index = 0; slave_index < config.slave_count; ++slave_index) {
         SlaveSpec &slave = config.slaves[slave_index];
@@ -217,6 +218,7 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
                 return false;
             }
         }
+        slave_identities_.push_back(slave_info);
     }
 
     input_domain_ = ecrt_master_create_domain(master_);
@@ -629,21 +631,54 @@ BusState EthercatMaster::readState() noexcept {
     ec_domain_state_t input_state{};
     ec_domain_state_t output_state{};
 
-    if (ecrt_master_state(master_, &master_state) != 0 ||
-        ecrt_domain_state(input_domain_, &input_state) != 0 ||
-        ecrt_domain_state(output_domain_, &output_state) != 0) {
-        return state;
+    if (ecrt_master_state(master_, &master_state) == 0) {
+        state.responding_slaves = master_state.slaves_responding;
+        state.al_states = master_state.al_states;
+        state.link_up = (master_state.link_up != 0U);
+        state.status_valid |= 3U;
+    }
+    const int input_rc = ecrt_domain_state(input_domain_, &input_state);
+    const int output_rc = ecrt_domain_state(output_domain_, &output_state);
+    if (input_rc == 0 && output_rc == 0) {
+        state.input_working_counter = input_state.working_counter;
+        state.output_working_counter = output_state.working_counter;
+        state.input_wc_state = input_state.wc_state;
+        state.output_wc_state = output_state.wc_state;
+        state.status_valid |= 4U;
     }
 
-    state.responding_slaves = master_state.slaves_responding;
-    state.al_states = master_state.al_states;
-    state.link_up = (master_state.link_up != 0U);
-    state.input_working_counter = input_state.working_counter;
-    state.output_working_counter = output_state.working_counter;
-    state.input_wc_state = input_state.wc_state;
-    state.output_wc_state = output_state.wc_state;
-
     return state;
+}
+
+bool EthercatMaster::publishIdentity(EcatBus &bus) const noexcept {
+    if (bus.slave_num < 0 || bus.slave_num > MAX_SLAVE_NUM ||
+        static_cast<std::size_t>(bus.slave_num) != slave_identities_.size()) return false;
+    for (std::size_t i = 0; i < slave_identities_.size(); ++i) {
+        const auto &info = slave_identities_[i];
+        auto &slave = bus.slaves[i];
+        slave.vendor_id = info.vendor_id;
+        slave.product_code = info.product_code;
+        slave.revision_number = info.revision_number;
+        slave.serial_number = info.serial_number;
+        slave.info_valid = 0x0fU;
+        slave.identity_source = 1U;
+        // Firmware is optional and not derivable from the SII revision.
+        slave.firmware_version[0] = '\0';
+    }
+    return true;
+}
+
+void EthercatMaster::publishSlaveRuntime(EcatBus &bus) noexcept {
+    if (bus.slave_num < 0 || bus.slave_num > MAX_SLAVE_NUM) return;
+    for (std::size_t i = 0; i < slave_configs_.size() && i < static_cast<std::size_t>(bus.slave_num); ++i) {
+        ec_slave_config_state_t state{};
+        const bool valid = ecrt_slave_config_state(slave_configs_[i], &state) == 0;
+        auto &slave = bus.slaves[i];
+        atomicStore(slave.online, valid && state.online ? 1U : 0U);
+        atomicStore(slave.al_state, valid && state.online ? state.al_state : 0U);
+        atomicStore(slave.al_status_code, 0U); // Not provided by the rt_safe config-state API.
+        atomicStore(slave.runtime_valid, valid ? (state.online ? 3U : 1U) : 0U);
+    }
 }
 
 int EthercatMaster::pollSlaves(ec_al_state_t target, bool &all_ready) noexcept {
@@ -732,6 +767,7 @@ void EthercatMaster::reset() noexcept {
     pdo_verification_.reset();
     process_data_layout_.reset();
     slave_configs_.clear();
+    slave_identities_.clear();
     input_data_ = nullptr;
     output_data_ = nullptr;
     input_size_ = 0;
