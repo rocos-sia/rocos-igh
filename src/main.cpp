@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
     ipc.ecatBus->supported_cmds = 1U << rocos::CMD_RESET_STATS;
     ipc.ecatBus->state_control_supported = 0U;
     ipc.ecatBus->dt = options.period_us;
-    ipc.ecatBus->current_state = 0; // IgH al_states is a set, not one master state.
+    ipc.ecatBus->current_state = 0; // Unknown until the cyclic task summarizes slave AL states.
     ipc.ecatBus->is_authorized = true;
     ipc.ecatBus->dc_sync_status = options.dc_enabled ? 4U : 0U;
     // DC deviation/lock and firmware are unavailable: leave their validity unset.

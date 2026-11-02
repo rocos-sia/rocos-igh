@@ -610,14 +610,21 @@ bool testUpdateSharedBusPreservesRequestAndExpectationStates() {
     bus.next_expected_state = ECAT_STATE_SAFEOP;
 
     rocos::BusState state{};
+    state.status_valid = 7U;
     state.link_up = true;
     state.responding_slaves = 2;
     state.al_states = EC_AL_STATE_OP;
     state.input_wc_state = EC_WC_COMPLETE;
     state.output_wc_state = EC_WC_COMPLETE;
+    for (int i = 0; i < bus.slave_num; ++i) {
+        rocos::atomicStore(bus.slaves[i].online, 1U);
+        rocos::atomicStore(bus.slaves[i].al_state, ECAT_STATE_OP);
+        rocos::atomicStore(bus.slaves[i].runtime_valid, 3U);
+    }
 
     rocos::updateSharedBus(state, stats, 1000U, 77L, bus);
 
+    CHECK(bus.current_state == ECAT_STATE_OP);
     CHECK(bus.request_state == ECAT_STATE_PREOP);
     CHECK(bus.next_expected_state == ECAT_STATE_SAFEOP);
     return true;

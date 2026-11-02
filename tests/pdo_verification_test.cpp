@@ -283,12 +283,19 @@ extern "C" int __wrap_ecrt_domain_state(const ec_domain_t *, ec_domain_state_t *
 extern "C" int __wrap_ecrt_slave_config_state(const ec_slave_config_t *, ec_slave_config_state_t *s) {
     *s = {1,1,EC_AL_STATE_OP};
     if (health_fault == 2 && read_calls > 0) { s->al_state = EC_AL_STATE_SAFEOP; s->operational = 0; }
+    if (runtime_diagnostics && runtime_sends >= 30 && runtime_sends < 35) {
+        s->al_state = EC_AL_STATE_SAFEOP;
+        s->operational = 0;
+    }
     return 0;
 }
 extern "C" int __wrap_ecrt_domain_queue(ec_domain_t *) { return 0; }
 extern "C" int __wrap_ecrt_master_send(ec_master_t *) {
     ++sends;
     if (task != nullptr) {
+        // The first startup sample must already summarize newly published OP.
+        if (sends == 1 && rocos::atomicLoad(ipc->ecatBus->current_state) != ECAT_STATE_OP)
+            invariant_failed = true;
         if (!task->startupReady()) {
             int value = 0;
             sem_getvalue(ipc->sem_mutex[0], &value);
@@ -297,6 +304,12 @@ extern "C" int __wrap_ecrt_master_send(ec_master_t *) {
         } else {
             saw_business_output = *output == 0xab;
             if (runtime_diagnostics) {
+                // Check same-cycle link loss/recovery and AL changes, including
+                // WKC-only faults that must leave OP intact. No one-cycle lag.
+                const int expected_state = runtime_sends >= 20 && runtime_sends < 25 ? 0 :
+                    runtime_sends >= 30 && runtime_sends < 35 ? ECAT_STATE_SAFEOP : ECAT_STATE_OP;
+                if (rocos::atomicLoad(ipc->ecatBus->current_state) != expected_state)
+                    invariant_failed = true;
                 if (!rocos::atomicLoad(ipc->ecatBus->link_up) || rocos::atomicLoad(ipc->ecatBus->wc_state) != 1) ++unauthorized_cycles;
                 now_ns += runtime_sends == 0 ? 2300000 : 30000;
                 rocos::RuntimeReport report;

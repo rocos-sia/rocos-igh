@@ -30,7 +30,7 @@ v1 二进制不兼容。升级或任一端异常退出后，停止主站和 App�
 | 信息 | IgH 适配行为 |
 |---|---|
 | `ecm_version` / `backend_type` | 完整产品版本 / 2（IGH），ready 前固定 |
-| `current_state` | 0（未知）；`al_states` 是集合，不冒充单一主站状态 |
+| `current_state` | 所有配置从站的一致 AL 状态：INIT=1、PREOP=2、BOOTSTRAP=3、SAFEOP=4、OP=8；未知、离线或混合状态为 0，不直接使用 IgH `al_states` 位集合 |
 | `state_control_supported` | 0，不消费 `request_state` |
 | `is_authorized` | true；IgH 不提供该产品许可检查，不能当作健康位 |
 | `timestamp` | `CLOCK_REALTIME` 的 Unix 微秒 |
@@ -43,6 +43,8 @@ v1 二进制不兼容。升级或任一端异常退出后，停止主站和 App�
 | `al_status_code` | 当前 rt_safe 状态接口不提供，保持无效 |
 | DC | 禁用为 0；启用但没有可靠锁定采样为 4（未知），metric/sample 为无效，不声称已同步 |
 | `supported_cmds` | 仅 `bit(CMD_RESET_STATS)` |
+
+`current_state` 初始为 0。启动等待及正常周期均先发布本轮从站运行字段，再汇总：要求配置数量为 1～50、在线数量/链路有效、链路连通、响应数量等于配置数量，且每个配置从站在线、AL 状态有效且相同；任一条件不满足即更新为 0，不保留旧 OP。该值表示从站实际 AL 状态的汇总，不是主站自身运行阶段、请求目标或总线就绪保证。WKC 单独由 `wc_state` 表达，全部 OP 时仍可能存在 WKC 异常；`state_control_supported` 保持 0。汇总只读取已有样本，不增加设备查询、分配或阻塞操作；周期超时不会因此改变控制流程，读取方仍应通过心跳判断数据是否过期。
 
 所有动态标量通过公共库 `atomicLoad`/`atomicStore` 访问，保证单字段不撕裂。
 静态名称、身份和映射在 ready 后不改动。不提供整个总线或 PDO 帧的一致快照。

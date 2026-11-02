@@ -136,8 +136,45 @@ bool applyStatisticsReset(StatisticsReset &reset, CycleStatistics &statistics,
 }
 
 #if ROCOS_IGH_BUILD_MASTER
+// Summarize this cycle's published slave AL states, never IgH's AL bitmask.
+// Zero means unavailable, offline, or mixed; WKC health is reported separately.
+static int summarizeBusState(const BusState &state, const EcatBus &bus) noexcept {
+    constexpr std::uint32_t required_valid = 0x03U; // Online count and link.
+    if ((state.status_valid & required_valid) != required_valid ||
+        !state.link_up || bus.slave_num <= 0 || bus.slave_num > MAX_SLAVE_NUM ||
+        state.responding_slaves != static_cast<unsigned int>(bus.slave_num)) {
+        return 0;
+    }
+
+    std::uint32_t common_state = 0;
+    for (int i = 0; i < bus.slave_num; ++i) {
+        const auto &slave = bus.slaves[i];
+        if ((atomicLoad(slave.runtime_valid) & 0x03U) != 0x03U ||
+            atomicLoad(slave.online) != 1U) {
+            return 0;
+        }
+        const auto al = atomicLoad(slave.al_state);
+        switch (al) {
+            case ECAT_STATE_INIT:
+            case ECAT_STATE_PREOP:
+            case ECAT_STATE_BOOTSTRAP:
+            case ECAT_STATE_SAFEOP:
+            case ECAT_STATE_OP:
+                break;
+            default:
+                return 0;
+        }
+        if (i == 0) {
+            common_state = al;
+        } else if (al != common_state) {
+            return 0;
+        }
+    }
+    return static_cast<int>(common_state);
+}
+
 // Publishes one cycle's state and timing into the shared EcatBus snapshot.
-// IgH has no runtime-license check or equivalent single master AL state.
+// Publish slave runtime first; current_state summarizes configured slaves.
 void updateSharedBus(const BusState &state,
                      CycleStatistics &statistics,
                      std::uint32_t period_us,
@@ -150,7 +187,7 @@ void updateSharedBus(const BusState &state,
     atomicStore(bus.max_cycle_time, statistics.maximum_us);
     atomicStore(bus.avg_cycle_time, statistics.average_us);
     atomicStore(bus.current_cycle_time, statistics.current_us);
-    atomicStore(bus.current_state, 0);
+    atomicStore(bus.current_state, summarizeBusState(state, bus));
     atomicStore(bus.is_authorized, true);
     atomicStore(bus.connected_slave_num, state.responding_slaves);
     atomicStore(bus.link_up, state.link_up ? 1U : 0U);
@@ -230,9 +267,9 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
             timespec wall_time{};
             if (clock_gettime(CLOCK_REALTIME, &wall_time) != 0) return errno;
             CycleStatistics startup_statistics{};
+            master_.publishSlaveRuntime(*ipc_.ecatBus);
             updateSharedBus(state, startup_statistics, period_us_, toMicroseconds(wall_time), *ipc_.ecatBus);
             atomicStore(ipc_.ecatBus->heartbeat_mono_ns, toNanoseconds(wake_time));
-            master_.publishSlaveRuntime(*ipc_.ecatBus);
         }
 
         static_assert(MAX_SLAVE_NUM <= 64, "Startup OP snapshot must fit in 64 bits");
@@ -349,9 +386,9 @@ int CyclicTask::run(volatile std::sig_atomic_t &stop_requested) noexcept {
         if (ipc_.ecatBus != nullptr) {
             timespec wall_time{};
             if (clock_gettime(CLOCK_REALTIME, &wall_time) != 0) return errno;
+            master_.publishSlaveRuntime(*ipc_.ecatBus);
             updateSharedBus(state, statistics_, period_us_, toMicroseconds(wall_time), *ipc_.ecatBus);
             atomicStore(ipc_.ecatBus->heartbeat_mono_ns, toNanoseconds(wake_time));
-            master_.publishSlaveRuntime(*ipc_.ecatBus);
             (void)applyStatisticsReset(statistics_reset_, statistics_, *ipc_.ecatBus);
         }
 

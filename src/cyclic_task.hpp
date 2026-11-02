@@ -73,6 +73,10 @@ timespec advanceDeadline(const timespec &previous_deadline,
 /**
  * @brief Publishes one cycle's state and timing into the shared bus snapshot.
  *
+ * Publish this cycle's slave runtime fields before calling. current_state is
+ * their common AL state, or zero when unavailable, offline, or mixed. WKC is
+ * independent; this does not provide a coherent multi-field snapshot.
+ *
  * @param state                  Bus/domain state snapshot for this cycle.
  * @param statistics             Running cycle statistics (updated in place).
  * @param period_us              Configured cycle period in microseconds.

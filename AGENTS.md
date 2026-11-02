@@ -21,7 +21,7 @@
 - IPC 命名约定为 `ecm_v2_{id}`、`pd_input_v2_{id}`、`pd_output_v2_{id}` 和 `sync_v2_{id}_{0..9}`。新增 IPC 对象也必须包含主站 ID，禁止跨主站共享可变状态。
 - 每个周期先把 EtherCAT 输入发布到 `pd_input_v2_{id}`，再从 `pd_output_v2_{id}` 取得待发送输出；数据就绪后通过现有信号量接口唤醒等待客户端。
 - `EcatBus`、`Slave` 和 `PdVar` 的 ABI v2 唯一定义来自固定版本子模块 `3rdparty/rocos-shm`，本地旧头文件仅作转发。不要随意改变字段顺序、类型、数组上限或旧别名 `EcatConfigMaster`/`EcatConfig`；确需变更时必须在公共库统一修改，同步主站与客户端并增加兼容性验证。v2 与 v1 不兼容，禁止双写或热接管。
-- 动态标量统一通过 `atomicLoad`/`atomicStore` 访问；邮箱只由唯一非实时线程处理。`is_authorized` 在 IgH 固定为 true；状态集合不赋给单一 `current_state`（使用 0），链路/WKC/从站 AL 状态由诊断字段及有效位表达。
+- 动态标量统一通过 `atomicLoad`/`atomicStore` 访问；邮箱只由唯一非实时线程处理。`is_authorized` 在 IgH 固定为 true；`current_state` 表示所有配置从站的一致 AL 状态：在线数量/链路有效、链路连通、响应数量匹配且所有配置从站在线、AL 状态有效且相同时发布该状态，否则发布 0。先发布本轮从站运行字段，再汇总；禁止直接赋值 IgH `al_states` 位集合。WKC 独立表达，不作为 AL 汇总条件；不宣称全总线一致快照。
 - ABI v2 拒绝非字节对齐 PDO；当前 TC7 GPIO 配置因此不可直接启动。仅支持统计复位邮箱命令，SDO/状态控制尚未验收，不声明能力。
 - PDO 访问类型的 `sizeof(T)` 必须与 `PdVar::size` 一致。新增代码先验证从站 ID、变量 ID、偏移和长度，再访问映射内存。
 - `EC_SEM_NUM` 同时限制每个主站可分配的等待线程数量。改动线程注册或信号量逻辑时，覆盖上限、重复等待和多主站隔离场景。

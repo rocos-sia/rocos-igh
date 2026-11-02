@@ -164,29 +164,132 @@ int main() {
     CHECK(rocos::EthercatMasterTestPeer::waitPreop(
         config, error, slow_query, fake_wait, 100, [&] { return elapsed_ms >= 71; }));
 
-    // The license is independent of bus health; report health in v2 diagnostics.
+    // Sample slaves before summarizing, as in startup and normal cyclic paths.
     rocos::CycleStatistics statistics{};
     rocos::EcatBus bus{};
-    bus.slave_num = 2;
     rocos::BusState state{};
-    state.status_valid = 7U;
-    state.link_up = true;
-    state.responding_slaves = 2;
-    state.input_wc_state = EC_WC_COMPLETE;
-    state.output_wc_state = EC_WC_COMPLETE;
-    state.al_states = EC_AL_STATE_OP;
-    rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(bus.is_authorized && bus.current_state == 0 && bus.wc_state == 1);
+    const auto reset_op = [&] {
+        bus.slave_num = 2;
+        bus.request_state = ECAT_STATE_PREOP;
+        bus.next_expected_state = ECAT_STATE_SAFEOP;
+        state.status_valid = 7U;
+        state.link_up = true;
+        state.responding_slaves = 2;
+        state.input_wc_state = EC_WC_COMPLETE;
+        state.output_wc_state = EC_WC_COMPLETE;
+        state.al_states = EC_AL_STATE_OP;
+        states[0] = states[1] = {1, 1, EC_AL_STATE_OP};
+        results[0] = results[1] = 0;
+    };
+    const auto publish = [&] {
+        master.publishSlaveRuntime(bus);
+        rocos::updateSharedBus(state, statistics, 1000, 0, bus);
+    };
+    reset_op();
+    const auto queries_before = queries[0];
+    publish();
+    CHECK(queries[0] == queries_before + 1); // Summary adds no backend query.
+    CHECK(bus.is_authorized && bus.current_state == ECAT_STATE_OP && bus.wc_state == 1);
+    CHECK(bus.request_state == ECAT_STATE_PREOP && bus.next_expected_state == ECAT_STATE_SAFEOP);
+
+    for (const unsigned int al : {1U, 2U, 3U, 4U, 8U}) {
+        states[0].al_state = states[1].al_state = al;
+        publish();
+        CHECK(bus.current_state == static_cast<int>(al));
+    }
+
+    // OP -> mixed -> OP must follow the newly sampled slave fields.
     state.al_states = EC_AL_STATE_OP | EC_AL_STATE_SAFEOP;
-    rocos::updateSharedBus(state, statistics, 1000, 0, bus);
+    states[1].al_state = EC_AL_STATE_SAFEOP;
+    publish();
     CHECK(bus.is_authorized && bus.current_state == 0);
-    state.al_states = EC_AL_STATE_OP;
+    states[1].al_state = EC_AL_STATE_OP;
+    publish();
+    CHECK(bus.current_state == ECAT_STATE_OP); // Use individual samples, not the bitmask.
+    state.al_states = EC_AL_STATE_INIT | EC_AL_STATE_PREOP;
+    states[0].al_state = EC_AL_STATE_INIT;
+    states[1].al_state = EC_AL_STATE_PREOP;
+    publish();
+    CHECK(bus.current_state == 0); // Bitmask 3 must not become BOOTSTRAP.
+
+    // A lost slave or a failed query must immediately clear a previously valid OP.
+    for (int i = 0; i < 2; ++i) {
+        reset_op();
+        publish();
+        CHECK(bus.current_state == ECAT_STATE_OP);
+        states[i].online = 0;
+        publish();
+        CHECK(bus.current_state == 0 && bus.slaves[i].runtime_valid == 1);
+        states[i].online = 1;
+        publish();
+        CHECK(bus.current_state == ECAT_STATE_OP);
+        results[i] = -EIO;
+        publish();
+        CHECK(bus.current_state == 0 && bus.slaves[i].runtime_valid == 0);
+    }
+
+    reset_op();
+    publish();
+    for (const unsigned int valid : {0U, 1U, 2U}) {
+        rocos::atomicStore(bus.slaves[1].runtime_valid, valid);
+        rocos::updateSharedBus(state, statistics, 1000, 0, bus);
+        CHECK(bus.current_state == 0); // Never trust an OP without both validity bits.
+    }
+    for (const unsigned int al : {0U, 5U, 12U, 15U}) {
+        states[0].al_state = states[1].al_state = al;
+        publish();
+        CHECK(bus.current_state == 0);
+    }
+
+    reset_op();
+    publish();
     state.output_wc_state = EC_WC_INCOMPLETE;
-    rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(bus.is_authorized && bus.wc_state == 2);
-    state.output_wc_state = EC_WC_COMPLETE;
+    publish();
+    CHECK(bus.is_authorized && bus.current_state == ECAT_STATE_OP && bus.wc_state == 2);
+    state.status_valid = 3U; // WKC unavailable does not invalidate AL state.
+    publish();
+    CHECK(bus.current_state == ECAT_STATE_OP && bus.wc_state == 0);
+
+    reset_op();
+    publish();
     state.link_up = false;
+    publish();
+    CHECK(bus.is_authorized && bus.current_state == 0 && bus.link_up == 0 && bus.status_valid == 7);
+    for (const unsigned int valid : {0U, 5U, 6U}) {
+        reset_op();
+        publish();
+        state.status_valid = valid;
+        publish();
+        CHECK(bus.current_state == 0);
+    }
+    for (const unsigned int responding : {0U, 1U, 3U}) {
+        reset_op();
+        publish();
+        state.responding_slaves = responding;
+        publish();
+        CHECK(bus.current_state == 0);
+    }
+    for (const int configured : {-1, 0, MAX_SLAVE_NUM + 1}) {
+        reset_op();
+        publish();
+        bus.slave_num = configured;
+        state.responding_slaves = configured > 0 ? configured : 0U;
+        rocos::updateSharedBus(state, statistics, 1000, 0, bus);
+        CHECK(bus.current_state == 0);
+    }
+    // Check the full configured range, including a fault in the last descriptor.
+    reset_op();
+    bus.slave_num = MAX_SLAVE_NUM;
+    state.responding_slaves = MAX_SLAVE_NUM;
+    for (auto &slave : bus.slaves) {
+        rocos::atomicStore(slave.online, 1U);
+        rocos::atomicStore(slave.al_state, ECAT_STATE_OP);
+        rocos::atomicStore(slave.runtime_valid, 3U);
+    }
     rocos::updateSharedBus(state, statistics, 1000, 0, bus);
-    CHECK(bus.is_authorized && bus.link_up == 0 && bus.status_valid == 7);
+    CHECK(bus.current_state == ECAT_STATE_OP);
+    rocos::atomicStore(bus.slaves[MAX_SLAVE_NUM - 1].online, 0U);
+    rocos::updateSharedBus(state, statistics, 1000, 0, bus);
+    CHECK(bus.current_state == 0);
     return 0;
 }
