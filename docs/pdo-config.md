@@ -1,5 +1,11 @@
 # PDO YAML 配置规范
 
+`--config` 仅加载 YAML。推荐通过 `igh.yaml` 中的 `eni:` 路径引用 ENI；见
+[ENI 配置说明](eni-config.md)。下文描述兼容保留的原有 `slaves:` 格式。
+`slaves:` 格式也可使用与 ECM 一致的顶层 `id`、`cycle`、`cpuidx`，以及顶层
+IgH 参数 `dc`、`preop_timeout_ms`、`op_timeout_ms`、`pdo_config_attempts`；
+顶层启动参数不能与旧 `master` 块混用，字段映射见 ENI 配置说明。
+
 主站通过启动参数 `--config <path>` 加载 PDO 配置。配置文件使用 YAML，当前
 格式版本为 `1`。同一文件的可选 `master` 块可配置主站启动参数；
 命令行显式参数覆盖 YAML，未配置字段使用程序默认值。`--config` 始终由命令行指定。

@@ -22,6 +22,8 @@ struct LoadedSlaveConfig::Impl {
 
     struct SlaveStorage {
         std::uint16_t id{0};
+        std::uint32_t vendor_id{0};
+        std::uint32_t product_code{0};
         std::string name;
         std::vector<std::string> entry_names;
         std::vector<PdoStorage> rx_storage;
@@ -104,6 +106,8 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
             const SlavePdoConfig &source = config.slaves[slave_index];
             Impl::SlaveStorage &target = built->storage[slave_index];
             target.id = source.id;
+            target.vendor_id = source.vendor_id;
+            target.product_code = source.product_code;
             target.name = source.name;
             target.dc = source.dc;
             target.init_commands = source.init_commands;
@@ -133,7 +137,7 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
         }
 
         for (Impl::SlaveStorage &target : built->storage) {
-            built->slaves.push_back({0, target.id, 0, 0, target.name.c_str(),
+            built->slaves.push_back({0, target.id, target.vendor_id, target.product_code, target.name.c_str(),
                                      target.syncs.data(), target.entries.data(),
                                      target.entries.size(), target.dc,
                                      target.init_commands.data(), target.init_commands.size()});
@@ -236,6 +240,11 @@ bool buildDistributedClockRuntimeConfig(const StaticSlaveConfig &config,
         const SlaveSpec &slave = config.slaves[slave_index];
         if (!slave.dc.has_value()) {
             continue;
+        }
+        if (slave.dc->sync0_cycle_ns != 0 && slave.dc->sync0_cycle_ns != period_us * 1000U) {
+            error = "runtime period does not match ENI DC CycleTime0 for slave[" +
+                    std::to_string(slave.position) + "]";
+            return false;
         }
         ++dc_slave_count;
         if (slave.dc->reference) {

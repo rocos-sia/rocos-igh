@@ -11,9 +11,22 @@
 
 Minimal C++ EtherCAT master shell built on IgH EtherCAT Master, with shared-memory IPC for client processes.
 
-The build requires yaml-cpp (`libyaml-cpp-dev` on Debian/Ubuntu). Master-enabled
+The build requires yaml-cpp and libxml2 (`libyaml-cpp-dev libxml2-dev` on Debian/Ubuntu). Master-enabled
 builds additionally require the IgH `ecrt.h` header and `libethercat` library.
 The master executable is enabled by default (`ROCOS_IGH_BUILD_MASTER=ON`).
+
+主站通过 `--config` 加载 YAML。推荐使用 [config/igh.yaml](config/igh.yaml)，
+通过其中的 `eni:` 相对路径加载 ENI，并配置主站参数：
+
+```bash
+./build-master/rocos_igh_master --config config/igh.yaml
+```
+
+[config/eni.xml](config/eni.xml) 是从 rocos-ecm 示例裁剪的单从站配置，使用前须替换为实际总线配置。
+`igh.yaml` 的顶层 `eni`、`id`、`cycle`（μs）、`cpuidx` 字段与 rocos-ecm 统一；
+`dc`、PREOP/OP 超时及 PDO 重试次数保留为 IgH 专有参数。`--config` 不接受直接传入 ENI XML。
+ENI 导入复用现有 SM2/SM3 PDO 和 PREOP 初始化流程；支持范围、参数优先级及限制见
+[ENI 配置说明](docs/eni-config.md)。原有 `config/talon_pdo.yaml` 及其 `master` 块继续可用。
 
 ## Shared memory ABI v2
 

@@ -9,7 +9,7 @@
 // 本工程自身头文件：引入各组件接口。
 #include "cyclic_task.hpp"          // 绝对时间周期任务（CyclicTask）
 #include "ethercat_master.hpp"      // IgH 主站生命周期封装（EthercatMaster）
-#include "pdo_config.hpp"           // YAML PDO 配置解析（PdoBusConfig）
+#include "pdo_config.hpp"           // YAML / ENI 配置解析（PdoBusConfig）
 #include "runtime_options.hpp"      // 命令行参数解析（RuntimeOptions）
 #include "shared_memory_config.hpp" // 共享内存 IPC 与跨进程 ABI（SharedMemoryConfig）
 #include "slave_config.hpp"         // 动态 IgH 配置所有权（LoadedSlaveConfig）

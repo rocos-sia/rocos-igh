@@ -7,6 +7,7 @@
 #include <charconv>
 #include <initializer_list>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -209,43 +210,63 @@ std::vector<InitCommandConfig> parseInitCommands(const YAML::Node &node,
     return commands;
 }
 
-RuntimeOptions parseMasterOptions(const YAML::Node &node) {
+RuntimeOptions parseMasterOptions(const YAML::Node &node, RuntimeOptions options = {},
+                                  bool flat = false) {
     if (!node.IsMap()) {
         throw std::runtime_error("master must be a mapping");
     }
-    rejectUnknownKeys(node, {"master_id", "period_us", "cpu", "dc",
-                            "preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts"},
-                      "master");
-    RuntimeOptions options;
+    if (!flat) {
+        rejectUnknownKeys(node, {"master_id", "period_us", "cpu", "dc",
+                                "preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts"},
+                          "master");
+    }
+    const std::string prefix = flat ? "root." : "master.";
     const auto integer = [&](const char *key, auto &value, std::uint64_t minimum) {
         if (!node[key]) return;
         using T = std::decay_t<decltype(value)>;
-        const std::string path = std::string("master.") + key;
+        const std::string path = prefix + key;
         const auto parsed = parseUnsigned(node[key], path, std::numeric_limits<T>::max());
         if (parsed < minimum) {
             throw std::runtime_error(path + " must be >= " + std::to_string(minimum));
         }
         value = static_cast<T>(parsed);
     };
-    integer("master_id", options.master_id, 0);
-    integer("period_us", options.period_us, 1000);
+    integer(flat ? "id" : "master_id", options.master_id, 0);
+    integer(flat ? "cycle" : "period_us", options.period_us, 1000);
     integer("preop_timeout_ms", options.preop_timeout_ms, 1);
     integer("op_timeout_ms", options.op_timeout_ms, 1);
     integer("pdo_config_attempts", options.pdo_config_attempts, 1);
-    if (node["cpu"] && !node["cpu"].IsNull()) {
-        unsigned int cpu = 0;
-        integer("cpu", cpu, 0);
-        options.cpu = cpu;
+    const char *cpu_key = flat ? "cpuidx" : "cpu";
+    if (node[cpu_key]) {
+        options.cpu.reset();
+        if (!node[cpu_key].IsNull()) {
+            unsigned int cpu = 0;
+            integer(cpu_key, cpu, 0);
+            options.cpu = cpu;
+        }
     }
     if (node["dc"]) {
-        const auto dc = parseString(node["dc"], "master.dc", 3);
+        const auto dc = parseString(node["dc"], prefix + "dc", 3);
         if (dc != "on" && dc != "off") {
-            throw std::runtime_error("master.dc must be on or off");
+            throw std::runtime_error(prefix + "dc must be on or off");
         }
         options.dc_enabled = dc == "on";
     }
     // Cross-field DC/period validation runs after the CLI overrides are merged.
     return options;
+}
+
+RuntimeOptions parseStartupOptions(const YAML::Node &root, RuntimeOptions defaults = {}) {
+    // Keep existing PDO YAML files working, but never accept ambiguous mixed layouts.
+    if (root["master"]) {
+        for (const char *key : {"id", "cycle", "cpuidx", "dc", "preop_timeout_ms",
+                                "op_timeout_ms", "pdo_config_attempts"}) {
+            if (root[key]) throw std::runtime_error(std::string("root.") + key +
+                " cannot be combined with the legacy master block");
+        }
+        return parseMasterOptions(root["master"], defaults);
+    }
+    return parseMasterOptions(root, defaults, true);
 }
 
 std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
@@ -324,17 +345,39 @@ bool loadPdoConfig(const std::string &path,
         if (!input) throw std::runtime_error("cannot open configuration file");
         const std::string source((std::istreambuf_iterator<char>(input)), {});
         if (input.bad()) throw std::runtime_error("cannot read configuration file");
+        // --config always names a YAML startup file; ENI is loaded only via eni:.
+        const auto start = source.find_first_not_of(" \t\r\n", source.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0);
+        if (start != std::string::npos && source[start] == '<')
+            throw std::runtime_error("--config requires YAML; reference the ENI with eni: <path> in igh.yaml");
         const YAML::Node root = YAML::Load(source);
         if (!root.IsMap()) {
             throw std::runtime_error("root must be a mapping");
         }
-        rejectUnknownKeys(root, {"version", "master", "slaves"}, "root");
+        rejectUnknownKeys(root, {"version", "master", "slaves", "eni", "id", "cycle", "cpuidx",
+                                "dc", "preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts"}, "root");
 
-        const std::uint64_t version = parseUnsigned(
-            requireNode(root, "version", "root"), "version",
-            std::numeric_limits<std::uint64_t>::max());
-        if (version != 1U) {
-            throw std::runtime_error("version must be 1");
+        // The ENI startup format mirrors ECM and does not require a version field.
+        // Preserve the existing version requirement for inline PDO descriptions.
+        if (root["version"] || !root["eni"]) {
+            const std::uint64_t version = parseUnsigned(
+                requireNode(root, "version", "root"), "version",
+                std::numeric_limits<std::uint64_t>::max());
+            if (version != 1U) throw std::runtime_error("version must be 1");
+        }
+
+        if (root["eni"]) {
+            if (root["slaves"]) throw std::runtime_error("eni and slaves are mutually exclusive");
+            const auto eni = parseString(root["eni"], "eni", 4096);
+            PdoBusConfig loaded;
+            const auto target = std::filesystem::path(path).parent_path() / eni;
+            if (!loadEniConfig(target.string(), loaded, error)) {
+                error = path + ": " + error;
+                config = {};
+                return false;
+            }
+            loaded.master = parseStartupOptions(root, loaded.master);
+            config = std::move(loaded);
+            return true;
         }
 
         const YAML::Node slaves = requireNode(root, "slaves", "root");
@@ -347,7 +390,7 @@ bool loadPdoConfig(const std::string &path,
 
         PdoBusConfig loaded;
         loaded.source_yaml = source;
-        if (root["master"]) loaded.master = parseMasterOptions(root["master"]);
+        loaded.master = parseStartupOptions(root);
         loaded.slaves.reserve(slaves.size());
         for (std::size_t slave_index = 0; slave_index < slaves.size(); ++slave_index) {
             const YAML::Node slave_node = slaves[slave_index];

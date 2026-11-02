@@ -147,7 +147,7 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
     }
 
     // Resolve defaults before IgH PDO setup, entry registration or any SDO download.
-    if (yaml_config != nullptr) {
+    if (yaml_config != nullptr && !yaml_config->from_eni) {
         const auto previous_yaml = yaml_config->source_yaml;
         if (!discoverEmptyPdoEntries(master_, *yaml_config, config_path, preop_deadline, error) ||
             !loaded_config->build(*yaml_config, error)) {

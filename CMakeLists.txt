@@ -15,6 +15,7 @@ option(ROCOS_IGH_BUILD_HARDWARE_TESTS "Enable tests requiring EtherCAT hardware"
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(LibXml2 REQUIRED)
 
 include(CTest)
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/rocos-shm/CMakeLists.txt")
@@ -27,6 +28,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 	find_package(EtherCAT REQUIRED)
 	add_library(rocos_igh_core STATIC
 		src/pdo_config.cpp
+		src/eni_config.cpp
 		src/pdo_config_file.cpp
 		src/pdo_discovery.cpp
 		src/pdo_verification.cpp
@@ -46,6 +48,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 		rocos::shm
 		EtherCAT::EtherCAT
 		yaml-cpp
+		LibXml2::LibXml2
 		Threads::Threads
 		${CMAKE_DL_LIBS}
 	)
@@ -128,7 +131,7 @@ if(BUILD_TESTING)
 		endforeach()
 		add_test(NAME dc_timing COMMAND dc_timing_test)
 	endif()
-	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp src/runtime_options.cpp)
+	add_executable(pdo_config_test tests/pdo_config_test.cpp src/pdo_config.cpp src/eni_config.cpp src/runtime_options.cpp)
 	target_include_directories(pdo_config_test PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	)
@@ -136,8 +139,16 @@ if(BUILD_TESTING)
 		ROCOS_IGH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 	)
 	target_compile_features(pdo_config_test PRIVATE cxx_std_17)
-	target_link_libraries(pdo_config_test PRIVATE yaml-cpp rocos::shm)
+	target_link_libraries(pdo_config_test PRIVATE yaml-cpp LibXml2::LibXml2 rocos::shm)
 	add_test(NAME pdo_config COMMAND pdo_config_test)
+	add_executable(eni_config_test tests/eni_config_test.cpp)
+	if(NOT ROCOS_IGH_BUILD_MASTER)
+		target_sources(eni_config_test PRIVATE src/pdo_config.cpp src/eni_config.cpp src/slave_config.cpp src/runtime_options.cpp)
+	endif()
+	target_compile_definitions(eni_config_test PRIVATE ROCOS_IGH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	target_link_libraries(eni_config_test PRIVATE rocos_igh_core yaml-cpp LibXml2::LibXml2)
+	add_test(NAME eni_config COMMAND eni_config_test)
+	set_tests_properties(eni_config PROPERTIES TIMEOUT 15)
 
 	add_executable(shared_memory_config_test tests/shared_memory_config_test.cpp)
 	if(NOT ROCOS_IGH_BUILD_MASTER)

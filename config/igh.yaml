@@ -1,0 +1,13 @@
+# ROCOS IgH startup configuration. Relative paths are based on this directory.
+# Common field names follow rocos-ecm/config/config.yaml.
+# Replace this example ENI with a file exported for the actual bus.
+eni: eni.xml
+id: 0                  # IgH master index; also selects the IPC namespace
+cycle: 1000            # us; >= 1000; must match ENI CycleTime0 when DC is enabled
+cpuidx: null           # Linux logical CPU; null/omitted keeps inherited affinity
+
+# IgH-specific settings. Explicit CLI values override the YAML settings.
+dc: on                 # on/off; omit to use the ENI DC selection
+preop_timeout_ms: 10000
+op_timeout_ms: 60000
+pdo_config_attempts: 5

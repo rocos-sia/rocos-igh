@@ -273,6 +273,28 @@ bool testInvalidMasterOptions() {
     return true;
 }
 
+bool testFlatStartupOptions() {
+    const TemporaryYamlFile file(validYaml() + R"yaml(
+id: 3
+cycle: 2000
+cpuidx: 2
+dc: off
+preop_timeout_ms: 20000
+op_timeout_ms: 80000
+pdo_config_attempts: 7
+)yaml");
+    rocos::PdoBusConfig config;
+    std::string error;
+    CHECK(rocos::loadPdoConfig(file.path(), config, error));
+    CHECK(!config.from_eni && !config.source_yaml.empty());
+    CHECK(config.master.master_id == 3 && config.master.period_us == 2000 && config.master.cpu == 2);
+    CHECK(!config.master.dc_enabled && config.master.preop_timeout_ms == 20000);
+    CHECK(config.master.op_timeout_ms == 80000 && config.master.pdo_config_attempts == 7);
+    CHECK(config.slaves[0].id == 0); // Top-level id is the master, rather than a slave id.
+    CHECK(expectConfigError(validYaml() + "master: {}\ncycle: 1000\n", "cannot be combined"));
+    return true;
+}
+
 bool testLoadsValidMultiSlaveConfig() {
     const TemporaryYamlFile file(R"yaml(
 version: 1
@@ -497,6 +519,7 @@ int main() {
   if (!testEmptyEntries()) return 1;
   if (!testInitCommands() || !testInvalidInitCommands()) return 1;
   if (!testMasterOptions() || !testInvalidMasterOptions()) return 1;
+  if (!testFlatStartupOptions()) return 1;
   if (!testLoadsValidMultiSlaveConfig()) {
     return 1;
   }

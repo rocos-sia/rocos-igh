@@ -13,7 +13,7 @@ struct RuntimeOptions {
     unsigned int master_id{0};     ///< Non-negative EtherCAT master index.
     std::uint32_t period_us{1000}; ///< Cycle period in microseconds (>= 1000).
     std::optional<unsigned int> cpu; ///< Logical CPU for cyclic thread; unset preserves affinity.
-    std::string config_path;       ///< Required PDO YAML configuration path.
+    std::string config_path;       ///< Required startup YAML path (e.g. config/igh.yaml).
     std::uint32_t preop_timeout_ms{10000}; ///< PREOP startup timeout [ms], positive.
     std::uint32_t op_timeout_ms{60000}; ///< OP startup timeout [ms], positive.
     std::uint32_t pdo_config_attempts{5}; ///< Total PREOP attempts per slave, positive.
@@ -32,7 +32,7 @@ struct RuntimeOptions {
  * @param argv    Argument vector.
  * @param options Receives defaults overlaid with explicitly supplied CLI values.
  * @param error   Receives a description of the first failure.
- * @param defaults Base values, normally loaded from the YAML master block.
+ * @param defaults Base values loaded from the startup YAML.
  * @return True on success.
  */
 bool parseRuntimeOptions(int argc, char **argv, RuntimeOptions &options, std::string &error,
