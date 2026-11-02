@@ -55,6 +55,7 @@ struct PdoBusConfig {
     RuntimeOptions master; ///< ENI/YAML startup defaults; CLI overrides these.
     std::string source_yaml; ///< Original file snapshot for guarded discovery writeback.
     bool from_eni{false}; ///< ENI declarations never trigger YAML discovery/writeback.
+    std::string eni_path; ///< Referenced ENI path for startup diagnostics (process-local).
 };
 
 bool loadPdoConfig(const std::string &path,

@@ -246,6 +246,12 @@ extern "C" int __wrap_rename(const char *from, const char *to) {
 extern "C" ec_master_t *__wrap_ecrt_request_master(unsigned int id) {
     requested_master = id; return reinterpret_cast<ec_master_t *>(1);
 }
+extern "C" int __wrap_ecrt_master(ec_master_t *, ec_master_info_t *info) {
+    *info = {};
+    info->slave_count = 1;
+    info->link_up = 1;
+    return 0;
+}
 extern "C" void __wrap_ecrt_release_master(ec_master_t *) { ++releases; }
 extern "C" ec_domain_t *__wrap_ecrt_master_create_domain(ec_master_t *) { ++domains; return nullptr; }
 extern "C" int __wrap_ecrt_master_activate(ec_master_t *) { ++activations; return -EPERM; }

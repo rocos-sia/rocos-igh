@@ -97,13 +97,14 @@ public:
     StaticSlaveConfig view() noexcept;
 
 private:
-    friend void printLoadedSlaveConfig(const LoadedSlaveConfig &, std::ostream &);
+    friend void printLoadedSlaveConfig(const LoadedSlaveConfig &, std::ostream &, bool);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
 void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output);
+void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output, bool color);
 #endif
 
 /**

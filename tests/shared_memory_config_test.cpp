@@ -845,8 +845,9 @@ bool testPrintsRuntimeSlavePdoMapping() {
     CHECK(text.find("RxPDO 0x1600 (SM2, master -> slave)") != std::string::npos);
     CHECK(text.find("RxPDO 0x1601 (SM2, master -> slave)") != std::string::npos);
     CHECK(text.find("TxPDO 0x1a00 (SM3, slave -> master)") != std::string::npos);
-    CHECK(text.find("0x607a:00  32 bit  offset=4  Target Position") != std::string::npos);
-    CHECK(text.find("0x6041:00  16 bit  offset=0  Status Word") != std::string::npos);
+    CHECK(text.find("Object       Bits  Bytes  Offset  Name") != std::string::npos);
+    CHECK(text.find("0x607a:00     32      4       4  Target Position") != std::string::npos);
+    CHECK(text.find("0x6041:00     16      2       0  Status Word") != std::string::npos);
     return true;
 }
 

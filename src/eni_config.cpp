@@ -242,6 +242,7 @@ bool loadEniConfig(const std::string &path, PdoBusConfig &config, std::string &e
         Node bus = child(root, "Config");
         PdoBusConfig loaded;
         loaded.from_eni = true;
+        loaded.eni_path = path;
         Node cyclic = child(bus, "Cyclic", false);
         if (cyclic) loaded.master.period_us = static_cast<std::uint32_t>(value(cyclic, "CycleTime", UINT32_MAX));
         if (loaded.master.period_us < 1000) throw std::runtime_error("Cyclic/CycleTime must be >= 1000 us");

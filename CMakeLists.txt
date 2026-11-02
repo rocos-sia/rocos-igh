@@ -38,6 +38,7 @@ if(ROCOS_IGH_BUILD_MASTER)
 		src/cyclic_task.cpp
 		src/runtime_options.cpp
 		src/thread_affinity.cpp
+		src/startup_report.cpp
 	)
 	target_include_directories(rocos_igh_core PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
@@ -73,6 +74,17 @@ else()
 endif()
 
 if(BUILD_TESTING)
+	add_executable(startup_report_test tests/startup_report_test.cpp)
+	if(NOT ROCOS_IGH_BUILD_MASTER)
+		target_sources(startup_report_test PRIVATE src/startup_report.cpp)
+	else()
+		foreach(symbol ecrt_master ecrt_master_get_slave)
+			target_link_options(startup_report_test PRIVATE "-Wl,--wrap=${symbol}")
+		endforeach()
+	endif()
+	target_link_libraries(startup_report_test PRIVATE rocos_igh_core)
+	add_test(NAME startup_report COMMAND startup_report_test)
+	set_tests_properties(startup_report PROPERTIES TIMEOUT 15)
 	add_executable(process_data_layout_test tests/process_data_layout_test.cpp)
 	if(NOT ROCOS_IGH_BUILD_MASTER)
 		target_sources(process_data_layout_test PRIVATE src/process_data_layout.cpp src/slave_config.cpp)
@@ -99,7 +111,7 @@ if(BUILD_TESTING)
 	if(ROCOS_IGH_BUILD_MASTER)
 		add_executable(pdo_discovery_test tests/pdo_discovery_test.cpp)
 		target_link_libraries(pdo_discovery_test PRIVATE rocos_igh_core)
-		foreach(symbol ecrt_master_sdo_upload ecrt_master_get_slave rename ecrt_request_master
+		foreach(symbol ecrt_master ecrt_master_sdo_upload ecrt_master_get_slave rename ecrt_request_master
 			ecrt_release_master ecrt_master_create_domain ecrt_master_activate ecrt_master_sdo_download)
 			target_link_options(pdo_discovery_test PRIVATE "-Wl,--wrap=${symbol}")
 		endforeach()

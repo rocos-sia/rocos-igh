@@ -2,6 +2,8 @@
 
 #include "shared_memory_config.hpp"
 #include "pdo_discovery.hpp"
+#include "startup_report.hpp"
+#include "console_style.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -123,6 +125,9 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
         return false;
     }
 
+    const bool scan_complete = printBusScan(master_, master_id, config.slave_count,
+                                            std::cout, consoleColorEnabled(std::cout));
+
     // IgH requests PREOP asynchronously when the master is reserved. Activating
     // while a slave is still OP can overwrite that request and skip reconfiguration.
     // Print current state of every slave before the wait loop so any non-PREOP
@@ -145,6 +150,8 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
         reset();
         return false;
     }
+    if (!scan_complete)
+        printBusScan(master_, master_id, config.slave_count, std::cout, consoleColorEnabled(std::cout));
 
     // Resolve defaults before IgH PDO setup, entry registration or any SDO download.
     if (yaml_config != nullptr && !yaml_config->from_eni) {

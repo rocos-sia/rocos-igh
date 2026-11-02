@@ -1,6 +1,7 @@
 #include "slave_config.hpp"
 
 #include "shared_memory_config.hpp"
+#include "console_style.hpp"
 
 #include <cstring>
 #include <iomanip>
@@ -161,15 +162,23 @@ StaticSlaveConfig LoadedSlaveConfig::view() noexcept {
 }
 
 void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output) {
+    printLoadedSlaveConfig(config, output, false);
+}
+
+void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output, bool color) {
     const std::ios::fmtflags saved_flags = output.flags();
     const char saved_fill = output.fill();
+    const ConsoleStyle style{color};
+    output << style.heading() << "\n[Registered PDO mapping] " << config.impl_->slaves.size()
+           << " slave(s)" << style.reset() << "\n  Offsets are bytes within each direction's domain.\n";
 
     for (std::size_t slave_index = 0; slave_index < config.impl_->slaves.size();
          ++slave_index) {
         const SlaveSpec &slave = config.impl_->slaves[slave_index];
         const LoadedSlaveConfig::Impl::SlaveStorage &storage =
             config.impl_->storage[slave_index];
-        output << "Slave " << slave.position << ": " << slave.name << '\n';
+        output << style.heading() << "Slave " << std::dec << slave.position << ": " << slave.name
+               << style.reset() << '\n';
         output << "  Identity: vendor=0x" << std::hex << std::nouppercase
                << std::setfill('0') << std::setw(8) << slave.vendor_id
                << " product=0x" << std::setw(8) << slave.product_code << '\n';
@@ -183,14 +192,17 @@ void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &outpu
                 output << "  " << label << " 0x" << std::hex << std::setfill('0')
                        << std::setw(4) << pdo.index << std::dec << std::setfill(' ')
                        << " (SM" << sync_index << ", " << direction << ")\n";
+                output << "    Object       Bits  Bytes  Offset  Name\n";
                 for (std::size_t pdo_entry = 0; pdo_entry < pdo.entries.size(); ++pdo_entry) {
                     const PdoEntrySpec &entry = slave.entries[entry_index++];
                     output << "    0x" << std::hex << std::setfill('0') << std::setw(4)
                            << entry.index << ':' << std::setw(2)
                            << static_cast<unsigned int>(entry.sub_index)
-                           << std::dec << std::setfill(' ') << "  "
-                           << static_cast<unsigned int>(entry.bit_length)
-                           << " bit  offset=" << entry.offset << "  " << entry.name;
+                           << std::dec << std::setfill(' ') << std::right
+                           << std::setw(7) << static_cast<unsigned int>(entry.bit_length)
+                           << std::setw(7) << unsigned(entry.bit_length) / 8U
+                           << std::setw(8) << entry.offset << "  " << entry.name
+                           << (entry.index == 0 ? " [padding]" : "");
                     if (entry.bit_position != 0 || entry.bit_length % 8 != 0) {
                         output << " bit_position=" << entry.bit_position
                                << " shared_offset=" << entry.shared_offset
@@ -204,7 +216,7 @@ void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &outpu
         print_pdos(storage.rx_storage, "RxPDO", 2, "master -> slave");
         print_pdos(storage.tx_storage, "TxPDO", 3, "slave -> master");
         if (slave.dc.has_value()) {
-            output << "  DC: assign_activate=0x" << std::hex << std::setfill('0')
+            output << "  DC config: assign_activate=0x" << std::hex << std::setfill('0')
                    << std::setw(4) << slave.dc->assign_activate << std::dec
                    << std::setfill(' ') << " sync0_cycle=--period-us"
                    << " sync0_shift_ns=" << slave.dc->sync0_shift_ns

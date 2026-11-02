@@ -14,6 +14,8 @@
 #include "shared_memory_config.hpp" // 共享内存 IPC 与跨进程 ABI（SharedMemoryConfig）
 #include "slave_config.hpp"         // 动态 IgH 配置所有权（LoadedSlaveConfig）
 #include "thread_affinity.hpp"
+#include "startup_report.hpp"
+#include "console_style.hpp"
 
 // 标准库与系统头文件。
 #include <atomic>
@@ -122,6 +124,10 @@ void printFinalStatistics(const rocos::CycleStatistics &stats, int run_result) {
 // Only the ordinary-priority reporter formats or writes periodic diagnostics.
 void printRuntimeReport(unsigned int master_id, std::size_t slave_count,
                         const rocos::RuntimeReport &report) {
+    const rocos::ConsoleStyle style{rocos::consoleColorEnabled(std::cout)};
+    const bool healthy = report.link_up && report.responding_slaves == slave_count &&
+                         report.al_states == EC_AL_STATE_OP &&
+                         report.input_wc_state == EC_WC_COMPLETE && report.output_wc_state == EC_WC_COMPLETE;
     const auto wcName = [](unsigned int state) {
         switch (state) {
         case EC_WC_ZERO: return "ZERO";
@@ -131,7 +137,7 @@ void printRuntimeReport(unsigned int master_id, std::size_t slave_count,
         }
     };
     std::ostringstream out;
-    out << std::fixed << std::setprecision(1)
+    out << (healthy ? style.ok() : style.warning()) << std::fixed << std::setprecision(1)
         << "[master " << master_id << "] window=" << report.window_seconds
         << "s cycles=" << report.cycle.samples
         << " link=" << (report.link_up ? "UP" : "DOWN")
@@ -145,7 +151,7 @@ void printRuntimeReport(unsigned int master_id, std::size_t slave_count,
     out << "(0x" << std::hex << report.al_states << std::dec << ")"
         << " authorized=" << report.authorized
         << " input_wc=" << report.input_wc << '/' << wcName(report.input_wc_state)
-        << " output_wc=" << report.output_wc << '/' << wcName(report.output_wc_state) << '\n';
+        << " output_wc=" << report.output_wc << '/' << wcName(report.output_wc_state) << style.reset() << '\n';
     const auto timing = [&](const char *name, const rocos::TimingSummary &t) {
         out << "  " << std::left << std::setw(22) << name
             << " (min/avg/max) [us]: " << std::right
@@ -156,15 +162,18 @@ void printRuntimeReport(unsigned int master_id, std::size_t slave_count,
     timing("Receive / Process", report.receive);
     timing("PDO Copy", report.pdo);
     timing("Queue / Send", report.send);
-    out << "  window/total: missed_deadlines=" << report.missed << '/' << report.total_missed
+    out << (report.missed || report.wc_errors || report.link_down ? style.warning() : "")
+        << "  window/total: missed_deadlines=" << report.missed << '/' << report.total_missed
         << " wc_error_cycles=" << report.wc_errors << '/' << report.total_wc_errors
-        << " link_down_cycles=" << report.link_down << '/' << report.total_link_down << '\n';
+        << " link_down_cycles=" << report.link_down << '/' << report.total_link_down << style.reset() << '\n';
     std::cout << out.str() << std::flush;
 }
 
 }  // namespace（匿名命名空间，仅本文件可见）
 
 int main(int argc, char **argv) {
+    const rocos::ConsoleStyle style{rocos::consoleColorEnabled(std::cout)};
+    const rocos::ConsoleStyle error_style{rocos::consoleColorEnabled(std::cerr)};
     // —— 第一步：解析命令行参数 ——
     rocos::RuntimeOptions options{}; // 参数解析结果（默认 master_id=0，period_us=1000）
     std::string error;               // 复用同一错误字符串，供各阶段写入失败原因
@@ -187,6 +196,7 @@ int main(int argc, char **argv) {
         std::cerr << error << '\n';
         return EXIT_FAILURE;
     }
+    rocos::printStartupConfiguration(pdo_config, options, ROCOS_IGH_VERSION, std::cout, style.enabled);
 
     // Validate before reserving the master or changing any slave configuration.
     if (options.cpu && !rocos::validateThreadCpu(*options.cpu, error)) {
@@ -203,6 +213,8 @@ int main(int argc, char **argv) {
                   << resolution.tv_sec << " s + " << resolution.tv_nsec
                   << " ns; expected 1 ns high-resolution clock\n";
     }
+    std::cout << "\n[Clock] CLOCK_MONOTONIC resolution=" << resolution.tv_sec << "s+"
+              << resolution.tv_nsec << "ns; absolute deadlines, period=" << options.period_us << " us\n";
 
     // Owns the PDO views, including entries discovered during PREOP initialization.
     rocos::LoadedSlaveConfig loaded_config;
@@ -216,11 +228,16 @@ int main(int argc, char **argv) {
     // —— 第四步：初始化 EtherCAT 主站（请求主站、建 domain、配从站、激活）——
     rocos::EthercatMaster master; // RAII 封装一个 IgH 主站
     if (!master.initialize(options, std::move(pdo_config), loaded_config, error)) {
-        std::cerr << error << '\n';
+        std::cerr << error_style.error() << "[Startup failed] master=" << options.master_id
+                  << ": " << error << error_style.reset() << '\n';
         return EXIT_FAILURE;
     }
     rocos::StaticSlaveConfig config = loaded_config.view();
-    rocos::printLoadedSlaveConfig(loaded_config, std::cout);
+    rocos::printLoadedSlaveConfig(loaded_config, std::cout, style.enabled);
+    std::cout << style.heading() << "\n[Master] Activated; OP/PDO readback/WKC readiness pending"
+              << style.reset() << "\n  master=" << options.master_id
+              << " input=" << master.inputSize() << " bytes  output=" << master.outputSize()
+              << " bytes  DC=" << (options.dc_enabled ? "on" : "off") << '\n';
 
     // —— 第五步：创建共享内存 IPC（总线快照 + PDO 缓冲区）——
     rocos::SharedMemoryConfig ipc(static_cast<int>(options.master_id)); // 按 master_id 隔离命名
@@ -253,18 +270,35 @@ int main(int argc, char **argv) {
     ipc.ecatBus->is_authorized = true;
     ipc.ecatBus->dc_sync_status = options.dc_enabled ? 4U : 0U;
     // DC deviation/lock and firmware are unavailable: leave their validity unset.
+    std::cout << style.heading() << "\n[IPC] ABI v2" << style.reset()
+              << "\n  metadata : ecm_v2_" << options.master_id
+              << "\n  input    : pd_input_v2_" << options.master_id << " (" << master.sharedInputSize() << " bytes)"
+              << "\n  output   : pd_output_v2_" << options.master_id << " (" << master.sharedOutputSize() << " bytes)"
+              << "\n  sync     : sync_v2_" << options.master_id << "_{0..9}"
+              << "\n  DC lock/deviation: unavailable; only the DC configuration is reported.\n"
+              << "\n[Realtime] requested policy=SCHED_FIFO priority=" << kRealtimePriority
+              << " cycle_us=" << options.period_us << " cpu="
+              << (options.cpu ? std::to_string(*options.cpu) : "auto (inherited)")
+              << " memory=mlockall stack_prefault=" << kPrefaultStackBytes << " bytes\n" << std::flush;
 
     // Start the reporter before SCHED_FIFO/mlockall; only this normal-priority
     // thread formats startup progress. The cyclic path publishes lock-free data.
     rocos::CyclicTask cyclic_task(master, ipc, options.period_us, options.op_timeout_ms);
     std::atomic<bool> reporter_stop{false};
+    std::atomic<bool> realtime_prepared{false};
     std::thread reporter;
     try {
         reporter = std::thread([&] {
             auto next_report = std::chrono::steady_clock::now();
             bool ready_announced = false;
+            bool realtime_announced = false;
             for (;;) {
                 const bool stopped = reporter_stop.load();
+                if (!realtime_announced && realtime_prepared.load()) {
+                    std::cout << style.ok() << "[Realtime] prepared; cyclic loop enabled (bus readiness pending)"
+                              << style.reset() << '\n' << std::flush;
+                    realtime_announced = true;
+                }
                 if (!stopped) {
                     ipc.processCommand([&](const rocos::AsyncCommandBox &request,
                                            rocos::AsyncCommandBox &) -> std::int32_t {
@@ -275,9 +309,9 @@ int main(int argc, char **argv) {
                 }
                 const bool ready = cyclic_task.startupReady();
                 if (ready && !ready_announced) {
-                    std::cout << "[master " << options.master_id
+                    std::cout << style.ok() << "[master " << options.master_id
                               << "] 全部从站就绪，可以开始工作（全部 RxPDO/TxPDO 分配及映射读回一致，OP、链路及输入/输出工作计数器连续 5 次检查正常）"
-                              << std::endl;
+                              << style.reset() << std::endl;
                     ready_announced = true;
                 }
                 rocos::RuntimeReport report;
@@ -321,9 +355,10 @@ int main(int argc, char **argv) {
         rocos::atomicStore(ipc.header->ready, 0U);
         reporter_stop.store(true);
         reporter.join();
-        std::cerr << error << '\n';
+        std::cerr << error_style.error() << "[Realtime failed] " << error << error_style.reset() << '\n';
         return EXIT_FAILURE;
     }
+    realtime_prepared.store(true); // The ordinary-priority reporter formats this event.
 
     // —— 第八步：运行周期任务直到收到停止信号 ——
     const int run_result = cyclic_task.run(g_stop_requested);      // 阻塞运行，直到停止标志置位
