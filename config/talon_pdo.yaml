@@ -21,7 +21,7 @@ master:
   cpu: null
 
   # 可选，默认 off。仅接受小写 on / off；dc: off 和 dc: "off" 均可。
-  # on 为全部从站启用 DC，要求恰有一个从站 dc_ref: true；其他从站可为 false 或省略。
+  # on 为 dc: ref/on（默认 on）的从站启用 DC，要求恰有一个 dc: ref；dc: off 的从站不启用。
   # off 不启用 DC。命令行覆盖：--dc <on|off>
   dc: "off"
 
@@ -53,7 +53,7 @@ slaves:
   - id: 0
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: true              # DC 参考时钟；启用 master.dc 时必须且只能有一个 true
+    dc: ref                   # DC 参考时钟；启用 master.dc 时必须且只能有一个 ref
     rx_pdos:
       - index: 0x1607
         entries:
@@ -75,7 +75,7 @@ slaves:
   - id: 1
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:
@@ -97,7 +97,7 @@ slaves:
   - id: 2
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:
@@ -119,7 +119,7 @@ slaves:
   - id: 3
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:
@@ -141,7 +141,7 @@ slaves:
   - id: 4
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:
@@ -163,7 +163,7 @@ slaves:
   - id: 5
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:
@@ -185,7 +185,7 @@ slaves:
   - id: 6
     name: Elmo Twitter Drive
     init_commands: []          # 可选；PREOP SDO 初始化列表，未填写时不额外写字典
-    dc_ref: false             # 非参考从站，也可省略此项；启用 DC 时仍参与同步
+    dc: on                    # 默认 on，也可省略；设为 off 可单独禁用此从站 DC
     rx_pdos:
       - index: 0x1607
         entries:

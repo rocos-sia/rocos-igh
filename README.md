@@ -174,9 +174,10 @@ DOWN；若被网络管理器重新拉起，需要将这些 EoE 接口设为不�
 `sudo ip link set dev <interface> up` 恢复对应接口。
 
 Distributed Clocks remain disabled unless explicitly enabled. When enabled,
-all YAML slaves use the built-in SYNC0 settings (AssignActivate 0x0300, zero shifts,
-SYNC1 disabled); exactly one slave must have `dc_ref: true`. Other slaves may set
-`dc_ref: false` or omit it and still participate in synchronization:
+YAML slaves use the built-in SYNC0 settings (AssignActivate 0x0300, zero shifts,
+SYNC1 disabled); exactly one slave must have `dc: ref`. Other slaves may set
+`dc: on` (the default) or omit it to participate in synchronization, or set
+`dc: off` to disable DC for that slave while retaining PDO communication:
 
 ```bash
 sudo bash scripts/disable-eoe.sh --master-id 0 && \

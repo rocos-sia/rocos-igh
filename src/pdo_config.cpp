@@ -130,20 +130,6 @@ std::int64_t parseSigned(const YAML::Node &node,
     return value;
 }
 
-bool parseBoolean(const YAML::Node &node, const std::string &path) {
-    if (!node.IsScalar() || node.Tag() != "?") {
-        throw std::runtime_error(path + " must be a boolean");
-    }
-    const std::string text = node.Scalar();
-    if (text == "true") {
-        return true;
-    }
-    if (text == "false") {
-        return false;
-    }
-    throw std::runtime_error(path + " must be a boolean");
-}
-
 std::vector<InitCommandConfig> parseInitCommands(const YAML::Node &node,
                                                 const std::string &path) {
     if (!node.IsSequence()) {
@@ -352,7 +338,7 @@ bool loadPdoConfig(const std::string &path,
             if (!slave_node.IsMap()) {
                 throw std::runtime_error(slave_path + " must be a mapping");
             }
-            rejectUnknownKeys(slave_node, {"id", "name", "dc_ref", "rx_pdos", "tx_pdos", "init_commands"},
+            rejectUnknownKeys(slave_node, {"id", "name", "dc", "rx_pdos", "tx_pdos", "init_commands"},
                               slave_path);
 
             SlavePdoConfig slave;
@@ -364,11 +350,18 @@ bool loadPdoConfig(const std::string &path,
             }
             slave.name = parseString(requireNode(slave_node, "name", slave_path),
                                      slave_path + ".name", MAX_SLAVE_NAME_LEN - 1U);
-            // All YAML slaves use the same SYNC0 mode. dc_ref only selects the
-            // reference clock; false/absent does not disable synchronization.
+            // Default to SYNC0; dc: off leaves no DC config so setup skips this slave.
             slave.dc = DistributedClockConfig{0x0300U, 0, 0U, 0, false};
-            if (slave_node["dc_ref"]) {
-                slave.dc->reference = parseBoolean(slave_node["dc_ref"], slave_path + ".dc_ref");
+            if (slave_node["dc"]) {
+                const auto dc = parseString(slave_node["dc"], slave_path + ".dc", 3);
+                if (dc != "ref" && dc != "on" && dc != "off") {
+                    throw std::runtime_error(slave_path + ".dc must be ref, on or off");
+                }
+                if (dc == "off") {
+                    slave.dc.reset();
+                } else {
+                    slave.dc->reference = dc == "ref";
+                }
             }
             if (slave_node["init_commands"]) {
                 slave.init_commands = parseInitCommands(slave_node["init_commands"],

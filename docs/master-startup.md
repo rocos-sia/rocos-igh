@@ -104,7 +104,7 @@ sudo ./build/rocos_igh_master \
 |---|---|
 | `sudo` | 提供设备访问、实时调度和内存锁定所需权限；系统资源限制仍可能导致失败 |
 | `--config ./config/talon_pdo.yaml` | 必填，加载主站参数、从站 PDO/DC 和可选初始化 SDO 配置；路径相对于当前工作目录 |
-| `--dc on` | 启用 Distributed Clocks；YAML 中必须恰有一个从站设置 `dc_ref: true`，其他从站为 false 或省略 |
+| `--dc on` | 启用 Distributed Clocks；YAML 中必须恰有一个从站设置 `dc: ref`，其他从站为 on（默认）或 off |
 | `--op-timeout-ms 60000` | OP 启动阶段总预算为 60 秒，包含稳定确认和 PDO 异步读回验证 |
 | `--cpu 3` | 将周期线程绑定到逻辑 CPU 3；编号从 0 开始，不是“第 3 个物理核” |
 | `--master-id 0` | 本次省略，默认主站 0，对应 `ecm0`、`pd_input0`、`pd_output0` 等 IPC |

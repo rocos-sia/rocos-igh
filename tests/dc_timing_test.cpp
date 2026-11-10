@@ -72,6 +72,12 @@ int testYamlDcReference() {
     }
     CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 2000, runtime, error));
     CHECK(runtime.enabled && runtime.sync0_cycle_ns == 2000000 && runtime.reference_slave_index == 0);
+    // A slave with DC disabled still builds alongside the synchronized slaves.
+    source.slaves[1].dc.reset();
+    CHECK(loaded.build(source, error));
+    CHECK(!loaded.view().slaves[1].dc.has_value());
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 2000, runtime, error));
+    CHECK(runtime.enabled && runtime.reference_slave_index == 0);
     source.slaves[0].dc->reference = false;
     CHECK(loaded.build(source, error));
     CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));

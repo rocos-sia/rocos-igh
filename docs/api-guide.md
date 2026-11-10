@@ -488,7 +488,7 @@ int ecrt_master_sdo_upload(master, slave_pos, index, subindex,
 
 本项目通过 `master.dc` 或命令行 `--dc on|off` 控制 DC，默认关闭。
 `AssignActivate` 固定为 `0x0300`，SYNC0 偏移及 SYNC1 周期/偏移固定为 0；
-YAML 仅通过 `slaves[].dc_ref: true` 指定参考时钟，其余从站省略或设为 false；
+YAML 通过 `slaves[].dc: ref` 指定参考时钟，其余从站默认 `on`，可设为 `off` 跳过 DC 配置；
 SYNC0 周期由合并后的 `period_us` 换算为纳秒。启用后若没有且仅有一个参考从站，
 主站会在请求硬件前拒绝配置。
 
