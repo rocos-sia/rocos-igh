@@ -486,11 +486,15 @@ int ecrt_master_sdo_upload(master, slave_pos, index, subindex,
 
 ## 8. 分布式时钟(DC)相关
 
-本项目通过 `master.dc` 或命令行 `--dc on|off` 控制 DC，默认关闭。
-`AssignActivate` 固定为 `0x0300`，SYNC0 偏移及 SYNC1 周期/偏移固定为 0；
-YAML 仅通过 `slaves[].dc_ref: true` 指定参考时钟，其余从站省略或设为 false；
-SYNC0 周期由合并后的 `period_us` 换算为纳秒。启用后若没有且仅有一个参考从站，
-主站会在请求硬件前拒绝配置。
+本项目通过 `master.dc`（或顶层 `dc`）和命令行 `--dc on|off` 控制 DC。
+内联 PDO YAML 默认关闭主站 DC。`slaves[].dc` 支持 `ref`、`on`、`off`，默认 `on`：
+主站开关为 off 时不为任何从站配置 DC；为 on 时只为 ref/on 从站配置 DC，
+并将 ref 从站选为参考时钟。off 从站保持 PDO 交换，不调用 `ecrt_slave_config_dc`。
+启用 DC 时必须恰有一个参考从站，否则在请求硬件前拒绝配置。
+内联 PDO YAML 的 `AssignActivate` 固定为 `0x0300`，SYNC0 偏移及 SYNC1 周期/偏移固定为 0；
+SYNC0 周期由合并后的 `period_us` 换算为纳秒。
+ENI 模式则使用 ENI 的各从站 DC 声明和激活值；不存在或未激活的 DC 不配置，
+有效 DC 声明默认开启主站 DC。具体约束见 [ENI 配置](eni-config.md)。
 
 若使用分布式时钟同步:
 

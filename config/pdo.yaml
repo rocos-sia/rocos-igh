@@ -3,7 +3,7 @@ version: 1
 slaves:
   - id: 0
     name: EtherCAT Drive
-    dc_ref: true
+    dc: ref
     rx_pdos:
       - index: 0x1600
         entries:

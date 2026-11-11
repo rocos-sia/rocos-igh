@@ -39,7 +39,7 @@ master:                       # 可选；此处列出程序默认值
 slaves:
   - id: 0
     name: EtherCAT Drive
-    dc_ref: true      # DC 参考从站；其他从站 false 或省略
+    dc: ref          # DC 参考从站；其他从站 on（默认）或 off
     init_commands: []  # 可选 PREOP SDO 初始化列表
     rx_pdos:
       - index: 0x1600
@@ -75,7 +75,7 @@ slaves:
 ```
 
 仓库中的 [示例配置](../config/pdo.yaml) 使用相同 PDO 映射，并通过
-`dc_ref: true` 指定参考时钟。
+`dc: ref` 指定参考时钟。
 
 ## 字段说明
 
@@ -86,7 +86,7 @@ slaves:
 | `master.master_id` | 无符号整数 | 默认 `0` | 对应 `--master-id` |
 | `master.period_us` | 无符号 32 位整数 | `>= 1000`，默认 `1000` | 对应 `--period-us`，单位 μs |
 | `master.cpu` | 无符号整数或 null | 默认 `null` | 对应 `--cpu`；`null` 沿用亲和性，CLI `--cpu auto` 可取消 YAML 绑定 |
-| `master.dc` | 字符串 | `"on"` / `"off"`，默认 `"off"` | 对应 `--dc`，控制是否为全部从站启用 DC |
+| `master.dc` | 字符串 | `"on"` / `"off"`，默认 `"off"` | 对应 `--dc`；off 关闭全部 DC，on 按各从站 dc 选择配置 |
 | `master.preop_timeout_ms` | 无符号 32 位整数 | `>= 1`，默认 `10000` | 对应 `--preop-timeout-ms`，包含全部从站 PREOP 配置及读回 |
 | `master.op_timeout_ms` | 无符号 32 位整数 | `>= 1`，默认 `60000` | 对应 `--op-timeout-ms` |
 | `master.pdo_config_attempts` | 无符号 32 位整数 | `>= 1`，默认 `5` | 对应 `--pdo-config-attempts`，每从站总尝试次数，包含首次 |
@@ -99,7 +99,7 @@ slaves:
 | `init_commands[].sub_index` | 无符号 8 位整数 | 必填，`0..255` | 对象字典子索引 |
 | `init_commands[].Type` | 字符串 | 必填，支持下表的 8 种整数类型 | 自动决定写入长度；也可写作 `type` |
 | `init_commands[].Value` | 整数 | 必填，必须落在 Type 的范围内 | 也可写作 `value`；不接受加引号的数字 |
-| `slaves[].dc_ref` | 布尔值 | 可选，默认 `false` | `true` 指定 DC 参考时钟；启用 DC 时恰好一个为 true |
+| `slaves[].dc` | 字符串 | `ref` / `on` / `off`，默认 `on` | ref 为参考时钟，on 启用同步配置，off 不配置 DC；启用 DC 时恰好一个 ref |
 | `slaves[].rx_pdos` | 序列 | 非空 | 从站接收、主站输出的 PDO 列表 |
 | `slaves[].tx_pdos` | 序列 | 非空 | 从站发送、主站输入的 PDO 列表 |
 | `rx_pdos[].index` / `tx_pdos[].index` | 无符号 16 位整数 | `0` 到 `0xFFFF` | PDO 映射对象索引 |
@@ -217,26 +217,37 @@ PDO 最终内容由 `rx_pdos`/`tx_pdos` 决定；初始化命令写入的 PDO �
 ## Distributed Clocks
 
 主站级开关保持不变：`master.dc: on` 或命令行 `--dc on` 启用 DC，默认关闭；
-命令行 `--dc off` 可临时覆盖 YAML 中的开启设置。
-从站只配置 `dc_ref`，不再使用嵌套的 `dc` 块：
+命令行 `--dc off` 可临时覆盖 YAML 中的开启设置。使用顶层启动参数时，对应顶层 `dc`。
+从站通过标量 `dc` 选择同步方式，不使用嵌套配置块：
 
 ```yaml
+master:
+  dc: on
 slaves:
   - id: 0
     name: Reference Drive
-    dc_ref: true
+    dc: ref
     # rx_pdos / tx_pdos 按实际设备填写
   - id: 1
     name: Other Drive
-    dc_ref: false  # 也可省略
+    dc: on   # 默认值，也可省略
+    # rx_pdos / tx_pdos 按实际设备填写
+  - id: 2
+    name: Sensor
+    dc: off  # 不配置 DC，PDO 仍正常配置和交换
     # rx_pdos / tx_pdos 按实际设备填写
 ```
 
-`dc_ref` 只决定参考时钟，不是各从站的同步开关。启用 DC 后，所有配置从站均使用
-统一的 SYNC0 模式；`false` 或省略的从站仍参与同步。参考从站可以位于任意位置，
-不要求是第一个。从站标记必须是未加引号的 `true` / `false`。
-多个 `dc_ref: true` 会在 YAML 加载时拒绝；没有参考从站时允许关闭 DC 启动，
-但启用 DC 会在请求主站前报错。
+| 主站 DC 开关（YAML/CLI 合并后） | 从站 dc: ref | 从站 dc: on 或省略 | 从站 dc: off |
+| --- | --- | --- | --- |
+| off | 不配置 DC | 不配置 DC | 不配置 DC |
+| on | 配置 DC 并选为参考时钟 | 配置 DC | 不配置 DC |
+
+`ref` 从站可以位于任意位置，不要求是第一个。仅接受小写 `ref` / `on` / `off`，
+加引号与不加引号等价；不接受布尔值。多个 `dc: ref` 会在 YAML 加载时拒绝；
+没有参考从站时允许关闭 DC 启动，但启用 DC 会在请求主站前报错。
+对配置 DC 后容易掉 OP 的传感器，可单独设置 `dc: off`，保留其他从站的同步配置。
+该选择只影响启动期 DC 配置，不改变现有周期收发和故障处理逻辑。
 
 以下参数移为内部固定值，沿用仓库现有设备配置，无需在 YAML 填写：
 
@@ -245,8 +256,9 @@ slaves:
 - `sync1_cycle_ns = 0`、`sync1_shift_ns = 0`，不使用 SYNC1。
 - SYNC0 周期取合并后的 `period_us * 1000` 纳秒（命令行优先于 `master.period_us`）。
 
-旧的 `slaves[].dc` 块及上述单独字段会作为未知字段拒绝，请删除并改为 `dc_ref`。
-`config/pdo.yaml`、`config/talon_pdo.yaml`、`config/ZeroErr6.yaml` 已同步迁移。
+旧的 `slaves[].dc_ref` 和上述单独字段作为未知字段拒绝，嵌套的 `dc` 块也不接受。
+迁移时将 `dc_ref: true` 改为 `dc: ref`，`dc_ref: false` 改为 `dc: on`；
+需要跳过 DC 的从站改为 `dc: off`。`config/` 下所有内联 PDO YAML 已同步迁移。
 这些固定设置对应本项目当前的 SYNC0 使用方式，其他模式需在代码中适配。
 
 启用 DC 时若周期换算超过 IgH `uint32_t` 纳秒范围，启动参数校验失败。

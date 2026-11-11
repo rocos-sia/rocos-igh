@@ -3,7 +3,7 @@ version: 1
 slaves:
   - id: 0
     name: ZeroErr Drive
-    dc_ref: true
+    dc: ref
     rx_pdos:
       - index: 0x1600
         entries:
@@ -25,7 +25,7 @@ slaves:
 
   - id: 1
     name: ZeroErr Drive
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:
@@ -47,7 +47,7 @@ slaves:
 
   - id: 2
     name: ZeroErr Drive
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:
@@ -69,7 +69,7 @@ slaves:
 
   - id: 3
     name: ZeroErr Drive
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:
@@ -91,7 +91,7 @@ slaves:
 
   - id: 4
     name: ZeroErr Drive
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:
@@ -113,7 +113,7 @@ slaves:
 
   - id: 5
     name: ZeroErr Drive
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:
@@ -134,7 +134,7 @@ slaves:
           - { name: Status Word,           index: 0x6041, sub_index: 0, bit_length: 16 }
   - id: 6
     name: XJC FT Sensor
-    dc_ref: false
+    dc: on
     rx_pdos:
       - index: 0x1600
         entries:

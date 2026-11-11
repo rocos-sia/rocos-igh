@@ -69,7 +69,7 @@ std::string replaceOnce(std::string source,
 }
 
 std::string validDcYaml() {
-    return replaceOnce(validYaml(), "    rx_pdos:\n", "    dc_ref: true\n    rx_pdos:\n");
+    return replaceOnce(validYaml(), "    rx_pdos:\n", "    dc: ref\n    rx_pdos:\n");
 }
 
 bool expectConfigError(const std::string &yaml, const std::string &error_fragment) {
@@ -345,36 +345,51 @@ slaves:
 bool testLoadsDistributedClockConfig() {
     rocos::PdoBusConfig config;
     std::string error;
-    for (const std::string &field : {"    dc_ref: true\n", "    dc_ref: false\n", ""}) {
+    for (const std::string &field : {"    dc: ref\n", "    dc: on\n", "    dc: off\n",
+                                     "    dc: \"ref\"\n", "    dc: \"on\"\n", "    dc: \"off\"\n", ""}) {
         const TemporaryYamlFile file(replaceOnce(validYaml(), "    rx_pdos:\n", field + "    rx_pdos:\n"));
         CHECK(rocos::loadPdoConfig(file.path(), config, error));
-        CHECK(config.slaves.size() == 1 && config.slaves[0].dc.has_value());
+        CHECK(config.slaves.size() == 1);
+        CHECK(config.slaves[0].dc.has_value() == (field.find("off") == std::string::npos));
+        if (!config.slaves[0].dc) continue;
         const auto &dc = *config.slaves[0].dc;
         CHECK(dc.assign_activate == 0x0300U && dc.sync0_shift_ns == 0);
         CHECK(dc.sync1_cycle_ns == 0 && dc.sync1_shift_ns == 0);
-        CHECK(dc.reference == (field == "    dc_ref: true\n"));
+        CHECK(dc.reference == (field.find("ref") != std::string::npos));
     }
-    // A non-first reference is valid; omitted dc_ref still supplies DC defaults.
+    // A non-first reference is valid; omitted dc still supplies DC defaults.
     const auto second = validDcYaml().substr(validDcYaml().find("  - id:"));
     const TemporaryYamlFile multi(validYaml() + replaceOnce(second, "id: 0", "id: 1"));
     CHECK(rocos::loadPdoConfig(multi.path(), config, error));
     CHECK(config.slaves.size() == 2);
     CHECK(config.slaves[0].dc.has_value() && !config.slaves[0].dc->reference);
     CHECK(config.slaves[1].dc.has_value() && config.slaves[1].dc->reference);
+    const auto sensor = replaceOnce(replaceOnce(second, "id: 0", "id: 2"), "dc: ref", "dc: off");
+    for (const std::string &master_dc : {"on", "off"}) {
+        const TemporaryYamlFile mixed(validYaml() + replaceOnce(second, "id: 0", "id: 1") + sensor +
+                                      "master: {dc: " + master_dc + "}\n");
+        CHECK(rocos::loadPdoConfig(mixed.path(), config, error));
+        CHECK(config.master.dc_enabled == (master_dc == "on"));
+        // The global gate is applied at startup; preserve choices for CLI overrides.
+        CHECK(config.slaves[0].dc && !config.slaves[0].dc->reference);
+        CHECK(config.slaves[1].dc && config.slaves[1].dc->reference);
+        CHECK(!config.slaves[2].dc);
+    }
     return true;
 }
 
 bool testRejectsInvalidDistributedClockConfig() {
-    for (const std::string &value : {"yes", "on", "1", "\"true\"", "null", "[]", "{}"}) {
-        CHECK(expectConfigError(replaceOnce(validDcYaml(), "dc_ref: true", "dc_ref: " + value),
-                                "dc_ref must be a boolean"));
+    for (const std::string &value : {"yes", "true", "false", "1", "ON", "REF", "", "null", "[]", "{}",
+                                     "{assign_activate: 0x0300, reference: true}"}) {
+        CHECK(expectConfigError(replaceOnce(validDcYaml(), "dc: ref", "dc: " + value),
+                                "dc must be ref, on or off"));
     }
-    CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc_ref: true\n",
-          "    dc_ref: true\n    dc_ref: false\n"), "dc_ref is duplicated"));
+    CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc: ref\n",
+          "    dc: ref\n    dc: on\n"), "dc is duplicated"));
     // Removed settings must not be silently accepted and ignored.
-    for (const std::string &field : {"dc: {assign_activate: 0x0300, reference: true}",
-             "assign_activate: 0x0300", "sync0_shift_ns: 0", "sync1_cycle_ns: 0", "sync1_shift_ns: 0"}) {
-        CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc_ref: true\n",
+    for (const std::string &field : {"dc_ref: true", "assign_activate: 0x0300", "sync0_shift_ns: 0",
+                                     "sync1_cycle_ns: 0", "sync1_shift_ns: 0"}) {
+        CHECK(expectConfigError(replaceOnce(validDcYaml(), "    dc: ref\n",
                                             "    " + field + "\n"), "is not allowed"));
     }
     const auto second = validDcYaml().substr(validDcYaml().find("  - id:"));

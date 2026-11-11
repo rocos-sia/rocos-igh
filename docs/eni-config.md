@@ -53,6 +53,22 @@ ENI `Cyclic/CycleTime` 单位为 μs，缺省时使用 1000 μs；多个 Cyclic 
 启用 DC 时最终运行周期必须等于每个 DC 从站 `CycleTime0`（ns），不自动改写设备时序。
 主站编号、CPU、启动超时仍由 YAML 或 CLI 指定。
 
+ENI 已支持与内联 YAML `slaves[].dc: ref/on/off` 对应的从站选择，无需添加新的 YAML 字段：
+
+| ENI 从站声明 | 等效选择 | 主站 DC 开关为 on 时 |
+| --- | --- | --- |
+| 有效 DC，`ReferenceClock=1` | ref | 配置 DC，并选为参考时钟 |
+| 有效 DC，`ReferenceClock=0` | on | 配置 DC |
+| 无 `DC` 节点，或 `CycleTime0=0`、`CycleTime1=0`、`ReferenceClock=0` | off | 不配置 DC，保留 PDO 交换 |
+
+有效 DC 需要非零 `CycleTime0`，以及 PS 阶段 `0x0980/0x0981` 启用 SYNC0 的激活写入。
+对于不能配置 DC 的传感器，在 ENI 导出工具中关闭该从站 DC，使其输出上述 off 声明。
+`config/igh.yaml` 的顶层 `dc: on` 只配置 ENI 中的 ref/on 从站，不会强制开启 off 从站；
+`dc: off` 或 `--dc off` 则为全部从站跳过 DC 配置。省略顶层 `dc` 时，
+存在有效 DC 声明则默认开启，否则默认关闭。ENI 本身仍须通过解析校验：
+存在有效 DC 声明时必须有且仅有一个参考时钟；主站 off 不绕过 ENI 合法性校验。
+`eni` 与 `slaves` 互斥，因此不能在 `igh.yaml` 中另加 `slaves[].dc` 覆盖 ENI。
+
 导入规则参考 rocos-ecm 的 `config/eni7.xml`、`config/config.yaml`，以及
 ethercat-web-configurator 的 `eni_slaves.py`、`eni_dc.py`、`eni.py`：
 

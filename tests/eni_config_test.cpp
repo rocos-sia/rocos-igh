@@ -107,6 +107,40 @@ bool tests() {
     CHECK(rocos::loadEniConfig(files.write("two.xml", two), config, error));
     CHECK(config.slaves.size() == 2 && config.slaves[0].dc->reference && !config.slaves[1].dc->reference);
 
+    // A mixed bus imports ref/on/off directly from ENI, with no YAML slave overrides.
+    const auto dc_start = second.find("<DC>"), dc_end = second.find("</DC>") + 5;
+    const auto dc = second.substr(dc_start, dc_end - dc_start);
+    for (const bool absent : {false, true}) {
+        auto sensor = replace(replace(second, "<AutoIncAddr>65535</AutoIncAddr>",
+                                      "<AutoIncAddr>65534</AutoIncAddr>"),
+                              "<PhysAddr>2005</PhysAddr>", "<PhysAddr>2006</PhysAddr>");
+        sensor = absent ? replace(sensor, dc, "") :
+            replace(sensor, "<CycleTime0>1000000</CycleTime0>", "<CycleTime0>0</CycleTime0>");
+        files.write("mixed.xml", replace(xml, first, first + second + sensor));
+        for (const std::string &gate : {"on", "off"}) {
+            CHECK(rocos::loadPdoConfig(files.write("mixed.yaml", "eni: mixed.xml\ndc: " + gate + "\n"),
+                                       config, error));
+            CHECK(config.master.dc_enabled == (gate == "on"));
+            CHECK(config.slaves.size() == 3 && config.slaves[0].dc->reference);
+            CHECK(config.slaves[1].dc && !config.slaves[1].dc->reference);
+            CHECK(!config.slaves[2].dc && !config.slaves[2].tx_pdos.empty());
+#if ROCOS_IGH_BUILD_MASTER
+            CHECK(loaded.build(config, error));
+            CHECK(!loaded.view().slaves[2].dc);
+            const auto dc_view = loaded.view();
+#else
+            rocos::SlaveSpec specs[3]{};
+            for (std::size_t i = 0; i < 3; ++i) specs[i].dc = config.slaves[i].dc;
+            const rocos::StaticSlaveConfig dc_view{specs, 3};
+#endif
+            rocos::DistributedClockRuntimeConfig runtime;
+            CHECK(rocos::buildDistributedClockRuntimeConfig(dc_view, config.master.dc_enabled,
+                                                           1000, runtime, error));
+            CHECK(runtime.enabled == (gate == "on"));
+            if (runtime.enabled) CHECK(runtime.reference_slave_index == 0);
+        }
+    }
+
     // SM assignment order can differ from the declaration catalogue order.
     auto ordered = replace(xml, "<Pdo>5634</Pdo>", "<Pdo>5643</Pdo>");
     const auto swap = ordered.find("<Pdo>5643</Pdo>", ordered.find("<Pdo>5643</Pdo>") + 1);

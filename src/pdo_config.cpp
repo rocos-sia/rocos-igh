@@ -131,20 +131,6 @@ std::int64_t parseSigned(const YAML::Node &node,
     return value;
 }
 
-bool parseBoolean(const YAML::Node &node, const std::string &path) {
-    if (!node.IsScalar() || node.Tag() != "?") {
-        throw std::runtime_error(path + " must be a boolean");
-    }
-    const std::string text = node.Scalar();
-    if (text == "true") {
-        return true;
-    }
-    if (text == "false") {
-        return false;
-    }
-    throw std::runtime_error(path + " must be a boolean");
-}
-
 std::vector<InitCommandConfig> parseInitCommands(const YAML::Node &node,
                                                 const std::string &path) {
     if (!node.IsSequence()) {
@@ -398,7 +384,7 @@ bool loadPdoConfig(const std::string &path,
             if (!slave_node.IsMap()) {
                 throw std::runtime_error(slave_path + " must be a mapping");
             }
-            rejectUnknownKeys(slave_node, {"id", "name", "dc_ref", "rx_pdos", "tx_pdos", "init_commands"},
+            rejectUnknownKeys(slave_node, {"id", "name", "dc", "rx_pdos", "tx_pdos", "init_commands"},
                               slave_path);
 
             SlavePdoConfig slave;
@@ -410,11 +396,14 @@ bool loadPdoConfig(const std::string &path,
             }
             slave.name = parseString(requireNode(slave_node, "name", slave_path),
                                      slave_path + ".name", MAX_SLAVE_NAME_LEN - 1U);
-            // All YAML slaves use the same SYNC0 mode. dc_ref only selects the
-            // reference clock; false/absent does not disable synchronization.
-            slave.dc = DistributedClockConfig{0x0300U, 0, 0U, 0, false};
-            if (slave_node["dc_ref"]) {
-                slave.dc->reference = parseBoolean(slave_node["dc_ref"], slave_path + ".dc_ref");
+            const auto dc_node = slave_node["dc"];
+            const std::string dc = dc_node && dc_node.IsScalar() ? dc_node.Scalar() : "on";
+            if ((dc_node && !dc_node.IsScalar()) || (dc != "ref" && dc != "on" && dc != "off")) {
+                throw std::runtime_error(slave_path + ".dc must be ref, on or off");
+            }
+            // Keep the selection even when master DC is off so CLI can enable it.
+            if (dc != "off") {
+                slave.dc = DistributedClockConfig{0x0300U, 0, 0U, 0, dc == "ref"};
             }
             if (slave_node["init_commands"]) {
                 slave.init_commands = parseInitCommands(slave_node["init_commands"],

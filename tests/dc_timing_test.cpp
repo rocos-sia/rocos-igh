@@ -72,6 +72,14 @@ int testYamlDcReference() {
     }
     CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 2000, runtime, error));
     CHECK(runtime.enabled && runtime.sync0_cycle_ns == 2000000 && runtime.reference_slave_index == 0);
+    source.slaves[1].dc.reset(); // A sensor with dc: off keeps its PDOs, without DC settings.
+    CHECK(loaded.build(source, error));
+    CHECK(!loaded.view().slaves[1].dc);
+    CHECK(loaded.view().slaves[1].entry_count > 0);
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
+    CHECK(runtime.enabled && runtime.reference_slave_index == 0);
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), false, 1000, runtime, error));
+    CHECK(!runtime.enabled && runtime.sync0_cycle_ns == 0);
     source.slaves[0].dc->reference = false;
     CHECK(loaded.build(source, error));
     CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
@@ -86,6 +94,12 @@ int testYamlDcReference() {
     CHECK(loaded.build(source, error));
     CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
     CHECK(error.find("multiple DC reference") != std::string::npos);
+    for (auto &slave : source.slaves) slave.dc.reset();
+    CHECK(loaded.build(source, error));
+    CHECK(!rocos::buildDistributedClockRuntimeConfig(loaded.view(), true, 1000, runtime, error));
+    CHECK(error.find("no DC-configured slave") != std::string::npos);
+    CHECK(rocos::buildDistributedClockRuntimeConfig(loaded.view(), false, 1000, runtime, error));
+    CHECK(!runtime.enabled);
     return 0;
 }
 

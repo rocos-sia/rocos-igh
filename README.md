@@ -250,10 +250,14 @@ DOWN；若被网络管理器重新拉起，需要将这些 EoE 接口设为不�
 需要恢复 EoE/IP 访问时，在主站应用停止后使用
 `sudo ip link set dev <interface> up` 恢复对应接口。
 
-Distributed Clocks remain disabled unless explicitly enabled. When enabled,
-all YAML slaves use the built-in SYNC0 settings (AssignActivate 0x0300, zero shifts,
-SYNC1 disabled); exactly one slave must have `dc_ref: true`. Other slaves may set
-`dc_ref: false` or omit it and still participate in synchronization:
+For inline PDO YAML, Distributed Clocks remain disabled unless explicitly enabled.
+With `master.dc: on` (or `--dc on`), slaves with `dc: ref` or `dc: on` (the default)
+use the built-in SYNC0 settings (AssignActivate 0x0300, zero shifts, SYNC1 disabled).
+Exactly one slave must have `dc: ref`. Set `dc: off` on sensors that should skip DC
+configuration; their PDO exchange remains enabled. The master switch `off` skips
+DC configuration for every slave. ENI mode uses each slave's ENI DC declaration
+and enables master DC by default when active DC declarations exist; see
+[ENI configuration](docs/eni-config.md).
 
 ```bash
 sudo bash scripts/disable-eoe.sh --master-id 0 && \

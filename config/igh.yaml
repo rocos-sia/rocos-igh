@@ -7,6 +7,9 @@ cycle: 1000            # us; >= 1000; must match ENI CycleTime0 when DC is enabl
 cpuidx: null           # Linux logical CPU; null/omitted keeps inherited affinity
 
 # IgH-specific settings. Explicit CLI values override the YAML settings.
+# on: configure only slaves with active ENI DC; off: skip DC for all slaves.
+# Per-slave selection comes from ENI: ReferenceClock=1 -> ref, active DC -> on,
+# absent DC or CycleTime0=0 (ReferenceClock=0, CycleTime1=0) -> off.
 dc: on                 # on/off; omit to use the ENI DC selection
 preop_timeout_ms: 10000
 op_timeout_ms: 60000
