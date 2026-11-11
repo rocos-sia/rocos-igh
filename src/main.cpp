@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     // Load PDOs and startup defaults once, then overlay only explicit CLI flags.
     rocos::PdoBusConfig pdo_config;
     if (!rocos::loadPdoConfig(options.config_path, pdo_config, error)) {
-        std::cerr << error << '\n';
+        std::cerr << "Configuration error (" << options.config_path << "): " << error << '\n';
         return EXIT_FAILURE;
     }
     if (!rocos::parseRuntimeOptions(argc, argv, options, error, pdo_config.master)) {
@@ -233,7 +233,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
     rocos::StaticSlaveConfig config = loaded_config.view();
-    rocos::printLoadedSlaveConfig(loaded_config, std::cout, style.enabled);
     std::cout << style.heading() << "\n[Master] Activated; OP/PDO readback/WKC readiness pending"
               << style.reset() << "\n  master=" << options.master_id
               << " input=" << master.inputSize() << " bytes  output=" << master.outputSize()
@@ -253,9 +252,14 @@ int main(int argc, char **argv) {
 
     // —— 第六步：把从站/PDO 元数据发布到共享内存，供客户端读取 ——
     if (!rocos::publishConfig(*ipc.ecatBus, config, error)) { // 填充 EcatBus 元数据
-        std::cerr << error << '\n';
+        std::cerr << "[PDO] ERROR: " << error << '\n';
         return EXIT_FAILURE;
     }
+    if (!ipc.validateLayout()) {
+        std::cerr << "[PDO] ERROR: SHM layout validation failed.\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "[PDO] Mapping validated; end of PDO configuration.\n" << std::flush;
     if (!master.publishIdentity(*ipc.ecatBus)) {
         std::cerr << "failed to publish slave identity" << '\n';
         return EXIT_FAILURE;
@@ -270,12 +274,7 @@ int main(int argc, char **argv) {
     ipc.ecatBus->is_authorized = true;
     ipc.ecatBus->dc_sync_status = options.dc_enabled ? 4U : 0U;
     // DC deviation/lock and firmware are unavailable: leave their validity unset.
-    std::cout << style.heading() << "\n[IPC] ABI v2" << style.reset()
-              << "\n  metadata : ecm_v2_" << options.master_id
-              << "\n  input    : pd_input_v2_" << options.master_id << " (" << master.sharedInputSize() << " bytes)"
-              << "\n  output   : pd_output_v2_" << options.master_id << " (" << master.sharedOutputSize() << " bytes)"
-              << "\n  sync     : sync_v2_" << options.master_id << "_{0..9}"
-              << "\n  DC lock/deviation: unavailable; only the DC configuration is reported.\n"
+    std::cout << "\n[SHM] DC lock/deviation: unavailable; only the DC configuration is reported.\n"
               << "\n[Realtime] requested policy=SCHED_FIFO priority=" << kRealtimePriority
               << " cycle_us=" << options.period_us << " cpu="
               << (options.cpu ? std::to_string(*options.cpu) : "auto (inherited)")

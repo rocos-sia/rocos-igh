@@ -1,5 +1,6 @@
 #include "startup_report.hpp"
 #include "console_style.hpp"
+#include "shared_memory_config.hpp"
 
 #include <filesystem>
 #include <iomanip>
@@ -18,59 +19,48 @@ std::string cpuName(const RuntimeOptions &options) {
     return options.cpu ? std::to_string(*options.cpu) : "auto (inherited)";
 }
 
-void printPdos(std::ostream &out, const std::vector<PdoMappingConfig> &pdos, bool rx, bool discover) {
-    if (pdos.empty()) out << "  " << (rx ? "RxPDO" : "TxPDO") << ": none\n";
-    for (const auto &pdo : pdos) {
-        out << "  " << (rx ? "RxPDO" : "TxPDO") << " 0x" << std::hex << std::setfill('0')
-            << std::setw(4) << pdo.index << std::dec << std::setfill(' ')
-            << (rx ? " (SM2, master -> slave)" : " (SM3, slave -> master)") << '\n';
-        if (pdo.entries.empty()) {
-            out << (discover ? "    entries: pending SDO discovery\n" : "    entries: none\n");
-            continue;
-        }
-        out << "    Object       Bits  Bytes  Name\n";
-        for (const auto &e : pdo.entries) {
-            out << "    0x" << std::hex << std::setfill('0') << std::setw(4) << e.index
-                << ':' << std::setw(2) << unsigned(e.sub_index) << std::dec << std::setfill(' ')
-                << std::setw(7) << unsigned(e.bit_length) << std::setw(7) << unsigned(e.bit_length) / 8U
-                << "  " << e.name << (e.index == 0 ? " [padding]" : "") << '\n';
-        }
-    }
-}
 } // namespace
 
 void printStartupConfiguration(const PdoBusConfig &config, const RuntimeOptions &effective,
                                const char *version, std::ostream &output, bool color) {
     const ConsoleStyle style{color};
     std::ostringstream out;
-    out << style.heading() << "\n=== ROCOS IgH " << version << " | Startup ===" << style.reset() << '\n'
-        << "[Configuration]\n  YAML : " << absolutePath(effective.config_path) << '\n'
-        << "  Mode : " << (config.from_eni ? "ENI topology" : "inline PDO YAML") << '\n';
-    if (config.from_eni) out << "  ENI  : " << absolutePath(config.eni_path) << '\n';
-    out << "  Differences are marked with *; Config/default includes ENI and built-in defaults.\n"
-        << "  " << std::left << std::setw(23) << "Setting" << std::setw(23) << "Config/default" << "  Effective\n";
-    const auto row = [&](const char *key, const std::string &configured, const std::string &value) {
-        out << "  " << std::left << std::setw(23) << key << std::setw(23) << configured
-            << (configured == value ? "  " : "* ") << value << '\n';
+    const auto row = [&](const char *key, const std::string &value) {
+        out << "  " << std::left << std::setw(25) << key << " : " << value << '\n';
     };
+    const auto setting = [&](const char *key, const std::string &configured, const std::string &value) {
+        row(key, value + (configured == value ? "" : " (CLI override; config/default=" + configured + ")"));
+    };
+    out << style.heading() << "\n[Startup] ROCOS EtherCAT Master ==================================\n" << style.reset();
+    row("version", version);
+    row("backend", "igh (IgH EtherCAT Master; backend_type=2)");
+#if ROCOS_IGH_BUILD_MASTER
+    row("SDK", "IgH ecrt API " + std::to_string(ECRT_VER_MAJOR) + "." +
+        std::to_string(ECRT_VER_MINOR) + " (compile-time headers)");
+#else
+    row("SDK", "unavailable (offline build)");
+#endif
+    row("config", absolutePath(effective.config_path));
+    out << style.heading() << "[Config] Loaded settings (defaults included) --------------------\n" << style.reset();
+    row("configuration source", config.from_eni ? "ENI topology" : "inline PDO YAML");
+    row("master.eni", config.from_eni ? absolutePath(config.eni_path) : "<empty> (inline PDO YAML)");
     const auto &base = config.master;
-    row("id", std::to_string(base.master_id), std::to_string(effective.master_id));
-    row("cycle [us]", std::to_string(base.period_us), std::to_string(effective.period_us));
-    row("cpuidx", cpuName(base), cpuName(effective));
-    row("dc", base.dc_enabled ? "on" : "off", effective.dc_enabled ? "on" : "off");
-    row("preop_timeout_ms", std::to_string(base.preop_timeout_ms), std::to_string(effective.preop_timeout_ms));
-    row("op_timeout_ms", std::to_string(base.op_timeout_ms), std::to_string(effective.op_timeout_ms));
-    row("pdo_config_attempts", std::to_string(base.pdo_config_attempts), std::to_string(effective.pdo_config_attempts));
-    out << std::right << style.heading() << "\n[Configured topology] " << config.slaves.size()
-        << " slave(s); positions are zero-based" << style.reset() << '\n';
+    setting("master.id", std::to_string(base.master_id) + " (IgH / IPC namespace)",
+            std::to_string(effective.master_id) + " (IgH / IPC namespace)");
+    setting("master.cycle", std::to_string(base.period_us) + " us", std::to_string(effective.period_us) + " us");
+    setting("master.cpuidx", cpuName(base), cpuName(effective));
+    setting("master.dc", base.dc_enabled ? "on" : "off", effective.dc_enabled ? "on" : "off");
+    setting("master.preop_timeout_ms", std::to_string(base.preop_timeout_ms) + " ms", std::to_string(effective.preop_timeout_ms) + " ms");
+    setting("master.op_timeout_ms", std::to_string(base.op_timeout_ms) + " ms", std::to_string(effective.op_timeout_ms) + " ms");
+    setting("master.pdo_config_attempts", std::to_string(base.pdo_config_attempts), std::to_string(effective.pdo_config_attempts));
+    row("configured slaves", std::to_string(config.slaves.size()));
+    out << std::right;
     for (const auto &slave : config.slaves) {
-        out << style.heading() << "Slave " << slave.id << ": " << slave.name << style.reset() << '\n';
+        out << style.heading() << "[Config] Slave[" << slave.id << "] " << slave.name << style.reset() << '\n';
         if (slave.vendor_id == 0 && slave.product_code == 0) out << "  Identity: discover from scanned SII\n";
         else out << "  Identity: vendor=0x" << std::hex << std::setfill('0') << std::setw(8) << slave.vendor_id
                  << " product=0x" << std::setw(8) << slave.product_code << std::dec << std::setfill(' ')
                  << " (strict match)\n";
-        printPdos(out, slave.rx_pdos, true, !config.from_eni);
-        printPdos(out, slave.tx_pdos, false, !config.from_eni);
         if (slave.dc) {
             const auto &dc = *slave.dc;
             out << "  DC: " << (effective.dc_enabled ? "enabled" : "disabled")
@@ -91,6 +81,18 @@ void printStartupConfiguration(const PdoBusConfig &config, const RuntimeOptions 
             out << std::dec << std::setfill(' ') << " (" << unsigned(cmd.size) << " bytes)\n";
         }
     }
+    out << style.heading() << "[SHM] rocos-shm protocol ----------------------------------------\n" << style.reset();
+    row("ABI version", std::to_string(SHM_ABI_VERSION));
+    row("header / bus size", std::to_string(sizeof(ShmHeader)) + " / " + std::to_string(sizeof(EcatBus)) + " bytes");
+    row("capacity", std::to_string(MAX_SLAVE_NUM) + " slaves; " + std::to_string(MAX_PDINPUT_NUM) +
+        " Input / " + std::to_string(MAX_PDOUTPUT_NUM) + " Output variables per slave");
+    const auto id = std::to_string(effective.master_id);
+    row("bus", "/" + std::string(EC_SHM) + id);
+    row("PDO Input / Output", "/pd_input_v2_" + id + " / /pd_output_v2_" + id);
+    row("sync", "/" + std::string(EC_SEM_MUTEX) + id + "_{0.." + std::to_string(EC_SEM_NUM - 1) + "}");
+    out << "================================================================\n"
+        << style.ok() << "\n[License] AUTHORIZED - 已授权：可连续运行。\n"
+        << "          IgH backend: is_authorized=true (license key not required).\n" << style.reset();
     output << out.str() << std::flush;
 }
 

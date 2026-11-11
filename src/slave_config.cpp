@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,6 +38,7 @@ struct LoadedSlaveConfig::Impl {
         std::vector<InitCommandConfig> init_commands;
     };
 
+    bool from_eni{false};
     std::vector<SlaveStorage> storage;
     std::vector<SlaveSpec> slaves;
 };
@@ -100,6 +102,7 @@ bool LoadedSlaveConfig::build(PdoBusConfig config, std::string &error) noexcept 
     try {
         error.clear();
         auto built = std::make_unique<Impl>();
+        built->from_eni = config.from_eni;
         built->storage.resize(config.slaves.size());
         built->slaves.reserve(config.slaves.size());
 
@@ -166,68 +169,58 @@ void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &outpu
 }
 
 void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output, bool color) {
-    const std::ios::fmtflags saved_flags = output.flags();
-    const char saved_fill = output.fill();
+    printLoadedSlaveConfig(config, output, color, std::nullopt);
+}
+
+void printLoadedSlaveConfig(const LoadedSlaveConfig &config, std::ostream &output, bool color,
+                            std::optional<unsigned int> connected) {
     const ConsoleStyle style{color};
-    output << style.heading() << "\n[Registered PDO mapping] " << config.impl_->slaves.size()
-           << " slave(s)" << style.reset() << "\n  Offsets are bytes within each direction's domain.\n";
-
-    for (std::size_t slave_index = 0; slave_index < config.impl_->slaves.size();
-         ++slave_index) {
-        const SlaveSpec &slave = config.impl_->slaves[slave_index];
-        const LoadedSlaveConfig::Impl::SlaveStorage &storage =
-            config.impl_->storage[slave_index];
-        output << style.heading() << "Slave " << std::dec << slave.position << ": " << slave.name
-               << style.reset() << '\n';
-        output << "  Identity: vendor=0x" << std::hex << std::nouppercase
-               << std::setfill('0') << std::setw(8) << slave.vendor_id
-               << " product=0x" << std::setw(8) << slave.product_code << '\n';
-
-        std::size_t entry_index = 0;
+    std::ostringstream out;
+    out << style.heading() << "\n[PDO] Configured slaves=" << config.impl_->slaves.size()
+        << "; connected=" << (connected ? std::to_string(*connected) : "unknown")
+        << style.reset() << "\n      Input = slave -> master (TxPDO); Output = master -> slave (RxPDO)\n"
+        << "      Offsets are absolute within each direction's process image.\n"
+        << "      Type: n/a (IgH PDO registration supplies no EtherCAT data type).\n";
+    for (std::size_t slave_index = 0; slave_index < config.impl_->slaves.size(); ++slave_index) {
+        const auto &slave = config.impl_->slaves[slave_index];
+        const auto &storage = config.impl_->storage[slave_index];
+        out << style.heading() << "\n[PDO] Slave[" << slave_index << "] " << slave.name
+            << " | position=" << slave.position << ", alias=0x" << std::hex << std::setfill('0')
+            << std::setw(4) << slave.alias << style.reset() << '\n'
+            << "      " << (config.impl_->from_eni ? "ENI identity" : "SII identity")
+            << ": vendor=0x" << std::setw(8) << slave.vendor_id
+            << " product=0x" << std::setw(8) << slave.product_code << std::dec << std::setfill(' ') << '\n';
         const auto print_pdos = [&](const std::vector<LoadedSlaveConfig::Impl::PdoStorage> &pdos,
-                                    const char *label,
-                                    unsigned int sync_index,
-                                    const char *direction) {
-            for (const LoadedSlaveConfig::Impl::PdoStorage &pdo : pdos) {
-                output << "  " << label << " 0x" << std::hex << std::setfill('0')
-                       << std::setw(4) << pdo.index << std::dec << std::setfill(' ')
-                       << " (SM" << sync_index << ", " << direction << ")\n";
-                output << "    Object       Bits  Bytes  Offset  Name\n";
-                for (std::size_t pdo_entry = 0; pdo_entry < pdo.entries.size(); ++pdo_entry) {
-                    const PdoEntrySpec &entry = slave.entries[entry_index++];
-                    output << "    0x" << std::hex << std::setfill('0') << std::setw(4)
-                           << entry.index << ':' << std::setw(2)
-                           << static_cast<unsigned int>(entry.sub_index)
-                           << std::dec << std::setfill(' ') << std::right
-                           << std::setw(7) << static_cast<unsigned int>(entry.bit_length)
-                           << std::setw(7) << unsigned(entry.bit_length) / 8U
-                           << std::setw(8) << entry.offset << "  " << entry.name
-                           << (entry.index == 0 ? " [padding]" : "");
-                    if (entry.bit_position != 0 || entry.bit_length % 8 != 0) {
-                        output << " bit_position=" << entry.bit_position
-                               << " shared_offset=" << entry.shared_offset
-                               << " shared_size=" << (unsigned(entry.bit_length) + 7U) / 8U;
-                    }
-                    output << '\n';
+                                    const char *label, std::size_t entry_index) {
+            std::size_t count = 0;
+            for (const auto &pdo : pdos) count += pdo.entries.size();
+            out << "  " << label << " (" << count << " variables) ------------------------------------------------\n";
+            if (count == 0) {
+                out << "    (none)\n";
+                return;
+            }
+            out << "    #  PDO    Index  Sub  BitLength  Offset(bit)  Byte.Bit  Type    Name\n";
+            std::size_t variable_index = 0;
+            for (const auto &pdo : pdos) {
+                for (std::size_t i = 0; i < pdo.entries.size(); ++i) {
+                    const auto &entry = slave.entries[entry_index++];
+                    const auto bit_offset = std::uint64_t{entry.offset} * 8U + entry.bit_position;
+                    const auto byte_bit = std::to_string(entry.offset) + "." + std::to_string(entry.bit_position);
+                    out << "  " << std::setw(3) << variable_index++ << "  0x" << std::hex << std::setfill('0')
+                        << std::setw(4) << pdo.index << " 0x" << std::setw(4) << entry.index
+                        << " 0x" << std::setw(2) << unsigned(entry.sub_index)
+                        << std::dec << std::setfill(' ') << std::setw(10) << unsigned(entry.bit_length)
+                        << std::setw(13) << bit_offset << std::setw(10) << byte_bit
+                        << "  n/a     " << entry.name << (entry.index == 0 ? " [padding]" : "") << '\n';
                 }
             }
         };
-
-        print_pdos(storage.rx_storage, "RxPDO", 2, "master -> slave");
-        print_pdos(storage.tx_storage, "TxPDO", 3, "slave -> master");
-        if (slave.dc.has_value()) {
-            output << "  DC config: assign_activate=0x" << std::hex << std::setfill('0')
-                   << std::setw(4) << slave.dc->assign_activate << std::dec
-                   << std::setfill(' ') << " sync0_cycle=--period-us"
-                   << " sync0_shift_ns=" << slave.dc->sync0_shift_ns
-                   << " sync1_cycle_ns=" << slave.dc->sync1_cycle_ns
-                   << " sync1_shift_ns=" << slave.dc->sync1_shift_ns
-                   << " reference=" << (slave.dc->reference ? "yes" : "no") << '\n';
-        }
+        std::size_t output_entries = 0;
+        for (const auto &pdo : storage.rx_storage) output_entries += pdo.entries.size();
+        print_pdos(storage.tx_storage, "Input / TxPDO", output_entries);
+        print_pdos(storage.rx_storage, "Output / RxPDO", 0);
     }
-
-    output.flags(saved_flags);
-    output.fill(saved_fill);
+    output << out.str() << std::flush;
 }
 #endif
 

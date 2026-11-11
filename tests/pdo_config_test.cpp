@@ -525,6 +525,9 @@ bool testRejectsInvalidDistributedClockConfig() {
     // The checked-in TC7 GPIO contains real 1-bit objects; never silently widen them.
     CHECK(!rocos::loadPdoConfig(ROCOS_IGH_SOURCE_DIR "/config/tc7_pdo.yaml", config, error));
     CHECK(error.find("byte-aligned") != std::string::npos);
+    CHECK(error.find("[PDO] Entry PDO=0x") != std::string::npos);
+    CHECK(error.find("BitLength=1 bit Name=") != std::string::npos);
+    CHECK(error.find("[PDO] Entry") < error.find("[PDO] ERROR"));
     return true;
   }
 

@@ -165,6 +165,8 @@ bool tests() {
         return true;
     };
     CHECK(bad(replace(xml, "<BitLen>8</BitLen>", "<BitLen>1</BitLen>"), "byte-aligned"));
+    CHECK(bad(replace(xml, "<BitLen>8</BitLen>", "<BitLen>1</BitLen>"), "BitLength=1 bit Name="));
+    CHECK(bad(replace(xml, "<BitLen>8</BitLen>", "<BitLen>1</BitLen>"), "[PDO] ERROR"));
     CHECK(bad(replace(xml, "<VendorId>154</VendorId>", "<VendorId>0</VendorId>"), "identity"));
     CHECK(bad(replace(xml, "<AutoIncAddr>0</AutoIncAddr>", "<AutoIncAddr>65535</AutoIncAddr>"), "AutoIncAddr"));
     CHECK(bad(replace(xml, "<Pdo>5634</Pdo>", "<Pdo>12345</Pdo>"), "conflicts"));

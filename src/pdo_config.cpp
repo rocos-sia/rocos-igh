@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <iterator>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -307,7 +309,13 @@ std::vector<PdoMappingConfig> parsePdos(const YAML::Node &node,
                 requireNode(entry_node, "bit_length", entry_path),
                 entry_path + ".bit_length", std::numeric_limits<std::uint8_t>::max()));
             if (entry.bit_length % 8U != 0U) {
-                throw std::runtime_error(entry_path + ".bit_length: ABI v2 requires byte-aligned PDO entries");
+                std::ostringstream diagnostic;
+                diagnostic << entry_path << "\n[PDO] Entry PDO=0x" << std::hex << std::setfill('0')
+                           << std::setw(4) << pdo.index << " Index=0x" << std::setw(4) << entry.index
+                           << " Sub=0x" << std::setw(2) << unsigned(entry.sub_index) << std::dec
+                           << " BitLength=" << unsigned(entry.bit_length) << " bit Name=" << entry.name
+                           << "\n[PDO] ERROR: ABI v2 requires byte-aligned PDO entries (offset unavailable before registration)";
+                throw std::runtime_error(diagnostic.str());
             }
             if (entry.bit_length == 0U) {
                 throw std::runtime_error(entry_path +

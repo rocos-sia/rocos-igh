@@ -1,5 +1,10 @@
 #include "startup_report.hpp"
 #include "console_style.hpp"
+#if ROCOS_IGH_BUILD_MASTER
+#include "slave_config.hpp"
+#include "process_data_layout.hpp"
+#include "shared_memory_config.hpp"
+#endif
 
 #include <cstring>
 #include <iostream>
@@ -38,36 +43,41 @@ bool configurationTests() {
     std::ostringstream out;
     out << std::hex;
     const auto flags = out.flags();
-    rocos::printStartupConfiguration(config, effective, "3.1.0", out);
+    rocos::printStartupConfiguration(config, effective, "3.1.0-rc.2", out);
     CHECK(out.flags() == flags); // Formatting cannot leak into subsequent messages.
     const auto text = out.str();
-    CHECK(text.find("ROCOS IgH 3.1.0") != std::string::npos);
-    CHECK(text.find("Config/default") != std::string::npos && text.find("Effective") != std::string::npos);
-    CHECK(text.find("* 3") != std::string::npos && text.find("* 2000") != std::string::npos);
-    CHECK(text.find("cpuidx") != std::string::npos && text.find("* 0") != std::string::npos);
-    for (const char *field : {"preop_timeout_ms", "op_timeout_ms", "pdo_config_attempts", "YAML :", "ENI  :"})
+    CHECK(text.find("[Startup] ROCOS EtherCAT Master") != std::string::npos);
+    CHECK(text.find("version                   : 3.1.0-rc.2") != std::string::npos);
+    CHECK(text.find("igh (IgH EtherCAT Master; backend_type=2)") != std::string::npos);
+    CHECK(text.find("master.id                 : 3 (IgH / IPC namespace) (CLI override;") != std::string::npos);
+    CHECK(text.find("master.cycle              : 2000 us (CLI override; config/default=1000 us)") != std::string::npos);
+    CHECK(text.find("master.cpuidx             : 0 (CLI override;") != std::string::npos);
+    for (const char *field : {"master.preop_timeout_ms", "master.op_timeout_ms", "master.pdo_config_attempts", "config                    : /", "master.eni                : /"})
         CHECK(text.find(field) != std::string::npos);
-    CHECK(text.find("Slave 0: Configured Drive") != std::string::npos);
+    CHECK(text.find("[Config] Slave[0] Configured Drive") != std::string::npos);
     CHECK(text.find("vendor=0x0000009a product=0x00030924") != std::string::npos);
-    CHECK(text.find("RxPDO 0x1600 (SM2, master -> slave)") != std::string::npos);
-    CHECK(text.find("0x6040:00     16      2  Control Word") != std::string::npos);
-    CHECK(text.find("TxPDO 0x1a00 (SM3, slave -> master)") != std::string::npos);
-    CHECK(text.find("[padding]") != std::string::npos);
     CHECK(text.find("DC: disabled") != std::string::npos && text.find("shift0_ns=-1000") != std::string::npos);
     CHECK(text.find("0x6060:00  data[LE]=08 (1 bytes)") != std::string::npos);
+    CHECK(text.find("ABI version               : 2") != std::string::npos);
+    CHECK(text.find("header / bus size") != std::string::npos);
+    CHECK(text.find("/ecm_v2_3") != std::string::npos);
+    CHECK(text.find("/pd_input_v2_3 / /pd_output_v2_3") != std::string::npos);
+    CHECK(text.find("/sync_v2_3_{0..9}") != std::string::npos);
+    CHECK(text.find("[License] AUTHORIZED - 已授权") != std::string::npos);
+    CHECK(text.find("[Startup]") < text.find("[Config]"));
+    CHECK(text.find("[Config]") < text.find("[SHM]"));
+    CHECK(text.find("[SHM]") < text.find("[License]"));
+    CHECK(text.find("[PDO]") == std::string::npos);
     CHECK(text.find('\033') == std::string::npos);
     CHECK(!rocos::consoleColorEnabled(out));
-    config.slaves[0].rx_pdos[0].entries.clear();
-    std::ostringstream empty_eni;
-    rocos::printStartupConfiguration(config, effective, "test", empty_eni);
-    CHECK(empty_eni.str().find("entries: none") != std::string::npos);
     config.from_eni = false;
     config.slaves[0].vendor_id = config.slaves[0].product_code = 0;
     std::ostringstream yaml;
     rocos::printStartupConfiguration(config, effective, "test", yaml, true);
-    CHECK(yaml.str().find("pending SDO discovery") != std::string::npos);
+    CHECK(yaml.str().find("<empty> (inline PDO YAML)") != std::string::npos);
     CHECK(yaml.str().find("discover from scanned SII") != std::string::npos);
     CHECK(yaml.str().find("\033[1;36m") != std::string::npos && yaml.str().find("\033[0m") != std::string::npos);
+    CHECK(yaml.str().find("\033[1;32m") != std::string::npos);
     return true;
 }
 
@@ -134,8 +144,21 @@ int main(int argc, char **argv) {
         options.dc_enabled = true;
         rocos::printStartupConfiguration(config, options, "preview", std::cout, rocos::consoleColorEnabled(std::cout));
 #if ROCOS_IGH_BUILD_MASTER
+        scanned_count = 1;
         rocos::printBusScan(reinterpret_cast<ec_master_t *>(1), options.master_id, config.slaves.size(),
                             std::cout, rocos::consoleColorEnabled(std::cout));
+        rocos::LoadedSlaveConfig loaded;
+        std::string error;
+        if (!loaded.build(config, error)) return 1;
+        auto view = loaded.view();
+        view.slaves[0].entries[1].offset = 2;
+        view.slaves[0].entries[3].offset = 4;
+        std::cout << "\n[SHM] Process image: Input=5 bytes; Output=3 bytes\n";
+        rocos::printLoadedSlaveConfig(loaded, std::cout, rocos::consoleColorEnabled(std::cout), scanned_count);
+        rocos::ProcessDataLayout layout;
+        rocos::EcatBus bus{};
+        if (!layout.build(view, 5, 3, error) || !rocos::publishConfig(bus, view, error)) return 1;
+        std::cout << "[PDO] Mapping validated; end of PDO configuration.\n";
 #endif
         return 0;
     }

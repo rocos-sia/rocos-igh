@@ -6,6 +6,8 @@
 #include <charconv>
 #include <cctype>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <memory>
 #include <stdexcept>
 #include <unordered_set>
@@ -153,8 +155,15 @@ std::vector<PdoMappingConfig> pdos(Node process, bool rx) {
             const auto sub = child(e, "SubIndex", entry.index != 0);
             entry.sub_index = sub ? static_cast<std::uint8_t>(number(content(sub), 255)) : 0;
             entry.bit_length = static_cast<std::uint8_t>(value(e, "BitLen", 255));
-            if (entry.bit_length == 0 || entry.bit_length % 8)
-                throw std::runtime_error("ABI v2 requires nonzero byte-aligned PDO entries");
+            if (entry.bit_length == 0 || entry.bit_length % 8) {
+                std::ostringstream diagnostic;
+                diagnostic << "\n[PDO] Entry PDO=0x" << std::hex << std::setfill('0')
+                           << std::setw(4) << pdo.index << " Index=0x" << std::setw(4) << entry.index
+                           << " Sub=0x" << std::setw(2) << unsigned(entry.sub_index) << std::dec
+                           << " BitLength=" << unsigned(entry.bit_length) << " bit Name=" << content(child(e, "Name", false))
+                           << "\n[PDO] ERROR: ABI v2 requires nonzero byte-aligned PDO entries (offset unavailable before registration)";
+                throw std::runtime_error(diagnostic.str());
+            }
             entry.name = label(e, "Name", entry.index == 0 ? "Padding" :
                                "Object_" + std::to_string(entry.index) + "_" + std::to_string(entry.sub_index),
                                MAX_PD_NAME_LEN - 1);

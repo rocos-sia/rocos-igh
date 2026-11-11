@@ -847,14 +847,38 @@ bool testPrintsRuntimeSlavePdoMapping() {
     std::ostringstream output;
     rocos::printLoadedSlaveConfig(loaded, output);
     const std::string text = output.str();
-    CHECK(text.find("Slave 0: First Drive") != std::string::npos);
+    CHECK(text.find("[PDO] Slave[0] First Drive | position=0, alias=0x0000") != std::string::npos);
     CHECK(text.find("vendor=0x000000ab product=0x00001234") != std::string::npos);
-    CHECK(text.find("RxPDO 0x1600 (SM2, master -> slave)") != std::string::npos);
-    CHECK(text.find("RxPDO 0x1601 (SM2, master -> slave)") != std::string::npos);
-    CHECK(text.find("TxPDO 0x1a00 (SM3, slave -> master)") != std::string::npos);
-    CHECK(text.find("Object       Bits  Bytes  Offset  Name") != std::string::npos);
-    CHECK(text.find("0x607a:00     32      4       4  Target Position") != std::string::npos);
-    CHECK(text.find("0x6041:00     16      2       0  Status Word") != std::string::npos);
+    CHECK(text.find("Input / TxPDO (1 variables)") != std::string::npos);
+    CHECK(text.find("Output / RxPDO (2 variables)") != std::string::npos);
+    CHECK(text.find("#  PDO    Index  Sub  BitLength  Offset(bit)  Byte.Bit  Type    Name") != std::string::npos);
+    CHECK(text.find("0x1600 0x607a 0x00        32           32       4.0  n/a     Target Position") != std::string::npos);
+    CHECK(text.find("0x1a00 0x6041 0x00        16            0       0.0  n/a     Status Word") != std::string::npos);
+    CHECK(text.find("Input / TxPDO") < text.find("Output / RxPDO"));
+    CHECK(text.find("Mapping validated") == std::string::npos);
+    CHECK(text.find('\033') == std::string::npos);
+
+    auto empty_direction = makeRuntimePdoConfig();
+    empty_direction.from_eni = true;
+    empty_direction.slaves[0].rx_pdos.clear();
+    const std::string long_name(200, 'x');
+    empty_direction.slaves[0].tx_pdos[0].entries[0].name = long_name;
+    CHECK(loaded.build(std::move(empty_direction), error));
+    config = loaded.view();
+    config.slaves[0].entries[0].offset = 12;
+    config.slaves[0].entries[0].bit_position = 3;
+    std::ostringstream raw;
+    const auto flags = raw.flags();
+    rocos::printLoadedSlaveConfig(loaded, raw, true, 2);
+    CHECK(raw.flags() == flags);
+    CHECK(raw.str().find("Configured slaves=2; connected=2") != std::string::npos);
+    CHECK(raw.str().find("ENI identity") != std::string::npos);
+    CHECK(raw.str().find("Output / RxPDO (0 variables) ------------------------------------------------\n    (none)") != std::string::npos);
+    CHECK(raw.str().find("99      12.3") != std::string::npos);
+    CHECK(raw.str().find(long_name) != std::string::npos);
+    CHECK(raw.str().find("\033[1;36m") != std::string::npos);
+    CHECK(!rocos::validateSlaveConfig(config, error));
+    CHECK(error.find("byte-aligned") != std::string::npos);
     return true;
 }
 

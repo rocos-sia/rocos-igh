@@ -373,9 +373,15 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
     input_size_ = ecrt_domain_size(input_domain_);
     output_size_ = ecrt_domain_size(output_domain_);
 
-    std::cout << "[EthercatMaster] master_id=" << master_id
-              << " input_domain_size=" << input_size_ << " bytes"
-              << " output_domain_size=" << output_size_ << " bytes\n";
+    std::cout << "\n[SHM] Process image: Input=" << input_size_
+              << " bytes; Output=" << output_size_ << " bytes\n";
+    // Show registered wire metadata before layout validation can reject an entry.
+    if (loaded_config != nullptr) {
+        ec_master_info_t info{};
+        std::optional<unsigned int> connected;
+        if (ecrt_master(master_, &info) == 0 && !info.scan_busy) connected = info.slave_count;
+        printLoadedSlaveConfig(*loaded_config, std::cout, consoleColorEnabled(std::cout), connected);
+    }
 
     if (input_data_ == nullptr || output_data_ == nullptr) {
         error = "failed to acquire domain data";
@@ -396,6 +402,7 @@ bool EthercatMaster::initializeImpl(unsigned int master_id, StaticSlaveConfig co
     // Domain sizes become available after activation. Prepare this local copy
     // plan before IPC publication and before starting the cyclic thread.
     if (!process_data_layout_.build(config, input_size_, output_size_, error)) {
+        std::cout << "[PDO] ERROR: " << error << '\n' << std::flush;
         reset();
         return false;
     }
